@@ -1,4 +1,4 @@
-﻿name: build-ipa
+name: build-ipa
 
 on:
   push:
@@ -6,24 +6,31 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-13
     steps:
       - uses: actions/checkout@v4
 
-      - name: 瑙ｅ帇婧愮爜
+      - name: Show env
+        run: |
+          sw_vers
+          xcodebuild -version
+
+      - name: Unzip source
         run: |
           set -e
           unzip -o WeChatVerFix-src.zip -d src
-          ls -la src
+          ls -la src src/WeChatVerFix
 
-      - name: 瀹夎宸ュ叿
-        run: brew install xcodegen ldid
+      - name: Install tools
+        run: |
+          brew install xcodegen ldid
 
-      - name: 鐢熸垚 Xcode 宸ョ▼
+      - name: Generate project
         working-directory: src/WeChatVerFix
         run: xcodegen generate
 
-      - name: 缂栬瘧锛堜笉绛惧悕锛?        working-directory: src/WeChatVerFix
+      - name: Build unsigned
+        working-directory: src/WeChatVerFix
         run: |
           set -e
           xcodebuild \
@@ -35,7 +42,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build
 
-      - name: 鎵撳寘鎴?IPA 骞舵敞鍏?entitlements
+      - name: Package IPA
         working-directory: src/WeChatVerFix
         run: |
           set -e
@@ -43,13 +50,13 @@ jobs:
           echo "APP=$APP"
           rm -rf ipa_root && mkdir -p ipa_root/Payload
           cp -R "$APP" ipa_root/Payload/
-          cp WeChatVerFix/entitlements.plist ipa_root/Payload/
-          ldid -Sipa_root/Payload/entitlements.plist ipa_root/Payload/WeChatVerFix.app/WeChatVerFix
+          ldid -SWeChatVerFix/entitlements.plist ipa_root/Payload/WeChatVerFix.app/WeChatVerFix
+          echo "--- entitlements on binary ---"
           ldid -e ipa_root/Payload/WeChatVerFix.app/WeChatVerFix || true
           cd ipa_root && zip -qry ../WeChatVerFix.ipa Payload
-          cd .. && ls -la WeChatVerFix.ipa
+          cd .. && ls -la WeChatVerFix.ipa && unzip -l WeChatVerFix.ipa
 
-      - name: 涓婁紶浜х墿
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: WeChatVerFix-ipa
