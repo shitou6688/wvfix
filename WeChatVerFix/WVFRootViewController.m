@@ -801,9 +801,6 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     CGFloat cw = w - 32;
     CGFloat inner = cw - 32;
 
-    CGFloat w = self.view.bounds.size.width;
-    CGFloat cw = w - 32;
-    CGFloat inner = cw - 32;
     CGFloat iw = cw - 32;
 
     // ---- 顶部卡片逐层下移 ----
@@ -973,6 +970,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     tv.textContainerInset = UIEdgeInsetsMake(8, 6, 8, 6);
     tv.text = self.logBuffer ?: @"";
     [logPanel addSubview:tv];
+    self.logView = tv;
 
     UITapGestureRecognizer *logTap =
         [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(showLogWindow)];
