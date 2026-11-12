@@ -475,6 +475,47 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     return [self writeInPlace:d toPath:[self plistPath]];
 }
 
+// 定位 TrollStore 的 root helper（它就在 TrollStore.app 里）
+- (NSString *)trollStoreHelperPath {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSArray *roots = @[@"/var/containers/Bundle/Application",
+                       @"/var/mobile/Containers/Bundle/Application",
+                       @"/private/var/containers/Bundle/Application"];
+    for (NSString *root in roots) {
+        for (NSString *d in [fm contentsOfDirectoryAtPath:root error:nil]) {
+            NSString *hp = [[root stringByAppendingPathComponent:d]
+                            stringByAppendingPathComponent:@"TrollStore.app/trollstorehelper"];
+            if ([fm fileExistsAtPath:hp]) return hp;
+        }
+    }
+    for (NSString *p in @[@"/var/jb/Applications/TrollStore.app/trollstorehelper",
+                          @"/Applications/TrollStore.app/trollstorehelper",
+                          @"/var/containers/Bundle/Application/.trollstore/TrollStore.app/trollstorehelper"]) {
+        if ([fm fileExistsAtPath:p]) return p;
+    }
+    return nil;
+}
+
+// 改完 Info.plist 后必须做两件事：
+//   1) 杀掉微信，让新进程重新读 plist（进程内 NSBundle 会缓存旧版本号）
+//   2) 重建图标缓存，让 LaunchServices 重新登记 app（否则桌面图标点不动）
+- (void)refreshIconCacheAndKill {
+    [self killWeChat];
+    NSString *h = [self trollStoreHelperPath];
+    if (!h) {
+        [self log:@"[!] 没找到 trollstorehelper"];
+        [self log:@"[!] 请手动：TrollStore → 设置 → Rebuild Icon Cache"];
+        return;
+    }
+    [self log:@"[i] 正在重建图标缓存…"];
+    int err = 0;
+    int rc = spawnRootFull(h, @[@"uicache"], WVF_PERSONA_FLAGS_OVERRIDE, nil, &err);
+    [self log:@"[i] 重建图标缓存：rc=%d spawnErr=%d", rc, err];
+    if (rc != 0) {
+        [self log:@"[!] 自动重建失败，请手动：TrollStore → 设置 → Rebuild Icon Cache"];
+    }
+}
+
 #pragma mark - 杀进程
 
 - (void)killWeChat {
@@ -690,7 +731,7 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
                                  self.currentBundleVer ?: @"(无此键)"];
         [self log:@"[+] 写入成功，回读：显示 %@ / 上报 %@",
             self.currentShortVer ?: @"?", self.currentBundleVer ?: @"?"];
-        [self killWeChat];
+        [self refreshIconCacheAndKill];
         [self log:@"[✓] 回桌面点开微信登录即可"];
     } else {
         [self log:@"[x] 写入失败：%@", err ?: @"未知"];
@@ -711,7 +752,7 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
                                  self.currentShortVer ?: @"?",
                                  self.currentBundleVer ?: @"(无此键)"];
         [self log:@"[+] 已还原：%@", first];
-        [self killWeChat];
+        [self refreshIconCacheAndKill];
     } else {
         [self log:@"[x] 还原失败：%@", first];
     }
