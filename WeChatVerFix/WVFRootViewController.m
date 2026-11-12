@@ -28,7 +28,7 @@
 extern char **environ;
 
 static NSString *const kDefaultShortVer  = @"8.0.90";
-static NSString *const kDefaultBundleVer = @"8.0.9.99";
+static NSString *const kDefaultBundleVer = @"8.0.99.99";
 
 #pragma mark - 版本字段判定
 
@@ -53,6 +53,42 @@ static NSString *bumpLastComponent(NSString *v) {
     long long n = [parts[idx] longLongValue];
     parts[idx] = [NSString stringWithFormat:@"%lld", n + 100];
     return [parts componentsJoinedByString:@"."];
+}
+
+// 拆成数字段
+static NSArray<NSNumber *> *numComponents(NSString *v) {
+    NSMutableArray *r = [NSMutableArray array];
+    for (NSString *p in [v componentsSeparatedByString:@"."]) {
+        [r addObject:@([p longLongValue])];
+    }
+    return r;
+}
+
+// 逐段取较大值，段数跟随 current
+static NSString *maxComponentwise(NSString *current, NSString *tpl) {
+    NSArray *c = numComponents(current);
+    NSArray *t = numComponents(tpl);
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSUInteger i = 0; i < c.count; i++) {
+        long long cv = [c[i] longLongValue];
+        long long tv = (i < t.count) ? [t[i] longLongValue] : cv;
+        long long m = cv > tv ? cv : tv;
+        [out addObject:[NSString stringWithFormat:@"%lld", m]];
+    }
+    return [out componentsJoinedByString:@"."];
+}
+
+// 逐段数值比较：newV 是否 >= oldV（缺段按 0）
+static BOOL versionAtLeast(NSString *newV, NSString *oldV) {
+    NSArray *a = numComponents(newV);
+    NSArray *b = numComponents(oldV);
+    NSUInteger n = a.count > b.count ? a.count : b.count;
+    for (NSUInteger i = 0; i < n; i++) {
+        long long av = (i < a.count) ? [a[i] longLongValue] : 0;
+        long long bv = (i < b.count) ? [b[i] longLongValue] : 0;
+        if (av != bv) return av > bv;
+    }
+    return YES;
 }
 
 #pragma mark - root 通道
@@ -586,6 +622,12 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     }
     self.currentShortVer = [self readVersion];
     self.currentBundleVer = [self readWeChatBundleVersion];
+    if (self.currentBundleVer.length) {
+        NSString *suggested = maxComponentwise(self.currentBundleVer, @"8.0.99.99");
+        self.bundleVerField.text = suggested;
+        [self log:@"[i] 当前上报版本 %@，建议改成 %@（逐段取大）",
+            self.currentBundleVer, suggested];
+    }
     self.statusLabel.text = [NSString stringWithFormat:@"当前：显示 %@ / 上报 %@",
                              self.currentShortVer ?: @"?",
                              self.currentBundleVer ?: @"(无此键)"];
@@ -618,6 +660,13 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
                       [NSCharacterSet whitespaceCharacterSet]];
     NSString *bVer = [self.bundleVerField.text stringByTrimmingCharactersInSet:
                       [NSCharacterSet whitespaceCharacterSet]];
+    if (self.currentBundleVer.length) {
+        if (versionAtLeast(bVer, self.currentBundleVer)) {
+            [self log:@"[i] 上报版本 %@ >= 当前 %@，方向正确", bVer, self.currentBundleVer];
+        } else {
+            [self log:@"[!] 上报版本 %@ 比当前 %@ 小，服务端可能仍判旧", bVer, self.currentBundleVer];
+        }
+    }
     if (sVer.length < 3 || bVer.length < 3) {
         [self log:@"[x] 版本号不合法：%@ / %@", sVer, bVer];
         return;
