@@ -707,7 +707,6 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     tv.textContainerInset = UIEdgeInsetsMake(10, 8, 10, 8);
     tv.text = self.logBuffer ?: @"";
     [card addSubview:tv];
-    self.logView = tv;
 
     UILongPressGestureRecognizer *lp =
         [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(copyLog)];
@@ -721,7 +720,6 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     UIView *v = self.logWindow;
     if (!v) return;
     self.logWindow = nil;
-    self.logView = nil;
     [UIView animateWithDuration:0.16 animations:^{ v.alpha = 0.0; }
                      completion:^(BOOL finished) { [v removeFromSuperview]; }];
 }
@@ -803,9 +801,14 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     CGFloat cw = w - 32;
     CGFloat inner = cw - 32;
 
-    // ---- 卡片 ----
-    CGFloat y = 20;
-    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(16, 20, cw, 0)];
+    CGFloat w = self.view.bounds.size.width;
+    CGFloat cw = w - 32;
+    CGFloat inner = cw - 32;
+    CGFloat iw = cw - 32;
+
+    // ---- 顶部卡片逐层下移 ----
+    CGFloat topMargin = 28;
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(16, topMargin, cw, 0)];
     card.backgroundColor = [UIColor whiteColor];
     card.layer.cornerRadius = 16;
     card.layer.shadowColor = [UIColor blackColor].CGColor;
@@ -815,7 +818,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     [self.view addSubview:card];
     self.cardView = card;
 
-    CGFloat by = 12;
+    CGFloat by = 14;
 
     UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(16, by, inner, 18)];
     t.text = @"微信版本伪装";
@@ -861,7 +864,6 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     [card addSubview:b3];
     by += 44;
 
-    // 结果提示条
     self.resultBanner = [[UIView alloc] initWithFrame:CGRectMake(16, by, inner, 34)];
     self.resultBanner.backgroundColor = [CLR_GRAY colorWithAlphaComponent:0.12];
     self.resultBanner.layer.cornerRadius = 9;
@@ -881,19 +883,19 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
         [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(showLogWindow)];
     [self.resultBanner addGestureRecognizer:tap];
 
-    by += 42;
-    card.frame = CGRectMake(16, 20, cw, by + 4);
+    by += 44;
+    card.frame = CGRectMake(16, topMargin, cw, by);
 
-    // ---- 教程面板 ----
-    CGFloat ty = card.frame.origin.y + card.frame.size.height + 13;
-    CGFloat tutH = self.view.bounds.size.height - ty - 16;
-    UIScrollView *tut = [[UIScrollView alloc] initWithFrame:CGRectMake(16, ty, cw, tutH)];
+    // ---- 底部教程（紧凑，靠底） ----
+    CGFloat rowH = 38, rowGap = 10, headerH = 22, noteH = 64;
+    CGFloat tutContentH = 16 + headerH + 4 * (rowH + rowGap) + noteH + 14;
+    CGFloat tutY = self.view.bounds.size.height - 16 - tutContentH;
+
+    UIScrollView *tut = [[UIScrollView alloc] initWithFrame:CGRectMake(16, tutY, cw, tutContentH)];
     tut.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.88];
     tut.layer.cornerRadius = 16;
     tut.showsVerticalScrollIndicator = NO;
     [self.view addSubview:tut];
-
-    CGFloat iw = cw - 32;
 
     NSArray *steps = @[
         @[@"1", @"点「改写版本」（绿色）", CLR_GREEN],
@@ -902,15 +904,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
         @[@"4", @"确认登录成功后，才点「还原版本」（灰色）", CLR_GRAY],
     ];
 
-    CGFloat headerH = 22;
-    CGFloat rowH = 38;
-    CGFloat noteH = 64;
-    CGFloat fixedH = 18 + headerH + 4 * rowH + noteH + 20;
-    CGFloat gap = (tutH - fixedH) / 5.0;
-    if (gap < 2) gap = 2;
-    if (gap > 30) gap = 30;
-
-    CGFloat cy = 18;
+    CGFloat cy = 16;
 
     UILabel *tTitle = [[UILabel alloc] initWithFrame:CGRectMake(16, cy, iw * 0.55, headerH)];
     tTitle.text = @"使用教程";
@@ -924,12 +918,12 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     tSub.font = [UIFont systemFontOfSize:10];
     tSub.textColor = CLR_SUB;
     [tut addSubview:tSub];
-    cy += headerH + gap;
+    cy += headerH + 4;
 
     for (NSArray *s in steps) {
         UIView *row = [self tutorialRow:s[0] text:s[1] y:cy width:iw color:s[2]];
         [tut addSubview:row];
-        cy += rowH + gap;
+        cy += rowH + rowGap;
     }
 
     UIView *note = [[UIView alloc] initWithFrame:CGRectMake(16, cy, iw, noteH)];
@@ -944,15 +938,47 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     noteText.font = [UIFont systemFontOfSize:10.5];
     noteText.textColor = [UIColor colorWithRed:0.55 green:0.42 blue:0.10 alpha:1.0];
     [note addSubview:noteText];
-    cy += noteH + 20;
-
+    cy += noteH + 14;
     tut.contentSize = CGSizeMake(cw, cy);
-    if (cy < tutH) {
-        CGFloat pad = (tutH - cy) / 2.0;
-        tut.contentInset = UIEdgeInsetsMake(pad, 0, pad, 0);
-    }
 
-    (void)y;
+    // ---- 中间日志面板（吃满剩余空间） ----
+    CGFloat logY = card.frame.origin.y + card.frame.size.height + 12;
+    CGFloat logH = tutY - 12 - logY;
+    if (logH < 88) logH = 88;
+
+    UIView *logPanel = [[UIView alloc] initWithFrame:CGRectMake(16, logY, cw, logH)];
+    logPanel.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.88];
+    logPanel.layer.cornerRadius = 16;
+    [self.view addSubview:logPanel];
+
+    UILabel *logTitle = [[UILabel alloc] initWithFrame:CGRectMake(16, 12, inner * 0.5, 18)];
+    logTitle.text = @"运行日志";
+    logTitle.font = [UIFont boldSystemFontOfSize:13];
+    logTitle.textColor = CLR_TEXT;
+    [logPanel addSubview:logTitle];
+
+    UILabel *logHint = [[UILabel alloc] initWithFrame:CGRectMake(16 + inner * 0.5, 12, inner * 0.5, 18)];
+    logHint.text = @"点此查看全部 ›";
+    logHint.textAlignment = NSTextAlignmentRight;
+    logHint.font = [UIFont systemFontOfSize:10];
+    logHint.textColor = CLR_GREEN;
+    [logPanel addSubview:logHint];
+
+    UITextView *tv = [[UITextView alloc] initWithFrame:CGRectMake(10, 34, cw - 20, logH - 44)];
+    tv.editable = NO;
+    tv.font = [UIFont fontWithName:@"Menlo" size:9.5] ?: [UIFont systemFontOfSize:9.5];
+    tv.textColor = [UIColor colorWithRed:0.28 green:0.32 blue:0.36 alpha:1.0];
+    tv.backgroundColor = [UIColor colorWithRed:0.96 green:0.98 blue:0.97 alpha:1.0];
+    tv.layer.cornerRadius = 10;
+    tv.textContainerInset = UIEdgeInsetsMake(8, 6, 8, 6);
+    tv.text = self.logBuffer ?: @"";
+    [logPanel addSubview:tv];
+
+    UITapGestureRecognizer *logTap =
+        [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(showLogWindow)];
+    [logPanel addGestureRecognizer:logTap];
+
+
     [self refresh];
 }
 
