@@ -525,6 +525,44 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     }
 }
 
+// 手动：重建图标缓存（等价于 TrollStore → 设置 → Rebuild Icon Cache）
+// refresh-all 内部会删 IconsCache、重建 LS 数据库、重新登记 App，最后 killall backboardd
+- (void)onRebuildIconCache {
+    self.view.userInteractionEnabled = NO;
+    [self log:@"[i] 开始重建图标缓存（refresh-all）…"];
+    dispatch_async(self.workQueue, ^{
+        NSString *h = [self trollStoreHelperPath];
+        if (!h) {
+            [self log:@"[!] 没找到 trollstorehelper"];
+            [self log:@"[!] 请手动：TrollStore → 设置 → Rebuild Icon Cache"];
+        } else {
+            int err = 0;
+            int rc = spawnRootFull(h, @[@"refresh-all"], WVF_PERSONA_FLAGS_OVERRIDE, nil, &err);
+            [self log:@"[i] refresh-all：rc=%d spawnErr=%d", rc, err];
+            [self log:@"[i] 桌面会黑屏刷新一下，属正常"];
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.view.userInteractionEnabled = YES;
+        });
+    });
+}
+
+// 手动：只重启桌面（杀 backboardd）
+- (void)onRespring {
+    [self log:@"[i] 重启桌面…"];
+    dispatch_async(self.workQueue, ^{
+        NSString *helper = [self helperPath];
+        if (helper.length) {
+            int err = 0;
+            int rc = spawnRootFull(helper, @[@"--kill", @"backboardd"],
+                                   WVF_PERSONA_FLAGS_OVERRIDE, nil, &err);
+            [self log:@"[i] 结束 backboardd：rc=%d spawnErr=%d", rc, err];
+        } else {
+            [self log:@"[!] 没有 wvfixd，无法重启桌面"];
+        }
+    });
+}
+
 #pragma mark - UI
 
 - (void)log:(NSString *)fmt, ... {
@@ -648,6 +686,17 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     [self.view addSubview:copyBtn];
     y += 44;
 
+    UIButton *rebuildBtn = [self makeButton:@"重建图标缓存" action:@selector(onRebuildIconCache)];
+    rebuildBtn.frame = CGRectMake(16, y, half, 38);
+    rebuildBtn.backgroundColor = [UIColor colorWithRed:0.85 green:0.55 blue:0.10 alpha:1.0];
+    [rebuildBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    [self.view addSubview:rebuildBtn];
+
+    UIButton *respringBtn = [self makeButton:@"重启桌面" action:@selector(onRespring)];
+    respringBtn.frame = CGRectMake(16 + half + 10, y, half, 38);
+    [self.view addSubview:respringBtn];
+    y += 44;
+
     self.logView = [[UITextView alloc] initWithFrame:CGRectMake(12, y, w - 24,
                                                                self.view.bounds.size.height - y - 14)];
     self.logView.editable = NO;
@@ -758,7 +807,8 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
                                  readShort ?: @"?", readBundle ?: @"?"];
     });
 
-    [self refreshIconCacheAndKill];
+    [self killWeChat];
+    [self log:@"[i] 写入已生效。需要让桌面图标恢复可点时，点下面的「重建图标缓存」"];
     [self log:@"[✓] 桌面重启后点开微信登录即可"];
 }
 
@@ -775,7 +825,8 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
             self.currentShortVer = [self readVersion];
             self.currentBundleVer = [self readWeChatBundleVersion];
             [self log:@"[+] 已还原：%@", first];
-            [self refreshIconCacheAndKill];
+            [self killWeChat];
+            [self log:@"[i] 写入已生效。需要让桌面图标恢复可点时，点下面的「重建图标缓存」"];
         } else {
             [self log:@"[x] 还原失败：%@", first];
         }
