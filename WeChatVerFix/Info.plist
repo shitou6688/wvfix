@@ -17,7 +17,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.9.0</string>
+	<string>1.9.1</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>LSRequiresIPhoneOS</key>
@@ -67,8 +67,8 @@
 		</dict>
 	</dict>
 	<key>WVFLicenseServer</key>
-	<string>http://124.221.171.80</string>
+	<string>http://124.221.171.80/wvf_api.php</string>
 	<key>WVFLicenseAppID</key>
-	<string>10002</string>
+	<string>10006</string>
 </dict>
 </plist>

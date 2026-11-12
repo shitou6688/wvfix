@@ -155,7 +155,7 @@ static const NSTimeInterval kOfflineGrace = 3 * 86400;
     }
 
     NSString *urlStr = [NSString stringWithFormat:
-        @"%@/api.php?api=%@&app=%@&kami=%@&markcode=%@",
+        @"%@?api=%@&app=%@&kami=%@&markcode=%@",
         base, action,
         [appid stringByAddingPercentEncodingWithAllowedCharacters:
             [NSCharacterSet URLQueryAllowedCharacterSet]],
