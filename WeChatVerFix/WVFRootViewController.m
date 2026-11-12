@@ -177,6 +177,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 @property (nonatomic, copy)   NSString *appPath;
 @property (nonatomic, copy)   NSString *currentShortVer;
 @property (nonatomic, copy)   NSString *currentBundleVer;
+@property (nonatomic, strong) UIView *tutorialOverlay;
 @end
 
 @implementation WVFRootViewController
@@ -626,6 +627,159 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     [self presentViewController:ac animated:YES completion:nil];
 }
 
+#pragma mark - 教程
+
+- (void)setupHelpButton {
+    UIButton *help = [UIButton buttonWithType:UIButtonTypeSystem];
+    [help setTitle:@"?" forState:UIControlStateNormal];
+    help.titleLabel.font = [UIFont boldSystemFontOfSize:19];
+    [help setTitleColor:CLR_GREEN forState:UIControlStateNormal];
+    help.frame = CGRectMake(0, 0, 34, 34);
+    [help addTarget:self action:@selector(showTutorial) forControlEvents:UIControlEventTouchUpInside];
+    self.navigationItem.rightBarButtonItem =
+        [[UIBarButtonItem alloc] initWithCustomView:help];
+}
+
+- (void)maybeShowTutorial {
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    if ([ud boolForKey:@"wvfTutorialShown"]) return;
+    [ud setBool:YES forKey:@"wvfTutorialShown"];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [self showTutorial];
+    });
+}
+
+// 一条步骤：左侧圆形序号 + 右侧说明
+- (UIView *)tutorialRow:(NSString *)index text:(NSString *)text
+                       y:(CGFloat)y width:(CGFloat)w color:(UIColor *)color {
+    UIView *row = [[UIView alloc] initWithFrame:CGRectMake(0, y, w, 46)];
+
+    UILabel *dot = [[UILabel alloc] initWithFrame:CGRectMake(0, 1, 22, 22)];
+    dot.text = index;
+    dot.textAlignment = NSTextAlignmentCenter;
+    dot.font = [UIFont boldSystemFontOfSize:12];
+    dot.textColor = [UIColor whiteColor];
+    dot.backgroundColor = color;
+    dot.layer.cornerRadius = 11;
+    dot.clipsToBounds = YES;
+    [row addSubview:dot];
+
+    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(32, 0, w - 32, 44)];
+    t.text = text;
+    t.numberOfLines = 0;
+    t.font = [UIFont systemFontOfSize:13];
+    t.textColor = CLR_TEXT;
+    t.lineBreakMode = NSLineBreakByWordWrapping;
+    [row addSubview:t];
+
+    return row;
+}
+
+- (void)showTutorial {
+    if (self.tutorialOverlay) return;
+    UIWindow *win = self.view.window;
+    if (!win) win = [UIApplication sharedApplication].keyWindow;
+    if (!win) return;
+
+    UIView *dim = [[UIView alloc] initWithFrame:win.bounds];
+    dim.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.45];
+    dim.alpha = 0.0;
+    self.tutorialOverlay = dim;
+
+    CGFloat cw = win.bounds.size.width - 56;
+    if (cw > 340) cw = 340;
+
+    NSArray *steps = @[
+        @[@"1", @"点「改写全部版本字段」（绿色按钮）", [UIColor colorWithRed:0.07 green:0.72 blue:0.42 alpha:1.0]],
+        @[@"2", @"点「重建图标缓存」（橙色按钮），期间会黑屏刷新几秒，属正常", [UIColor colorWithRed:0.93 green:0.58 blue:0.10 alpha:1.0]],
+        @[@"3", @"黑屏结束后，从后台进入微信，正常登录即可", [UIColor colorWithRed:0.20 green:0.55 blue:0.90 alpha:1.0]],
+        @[@"4", @"不再需要伪装时，才点「还原到改前版本」（灰色按钮）", [UIColor colorWithRed:0.52 green:0.57 blue:0.62 alpha:1.0]],
+    ];
+
+    CGFloat pad = 20;
+    CGFloat inner = cw - pad * 2;
+    CGFloat h = pad + 26 + 20 + 6 + 4 * 50 + 10 + 62 + 12 + 44 + pad;
+
+    UIView *card = [[UIView alloc] initWithFrame:
+                    CGRectMake((win.bounds.size.width - cw) / 2,
+                               (win.bounds.size.height - h) / 2, cw, h)];
+    card.backgroundColor = [UIColor whiteColor];
+    card.layer.cornerRadius = 20;
+    card.layer.shadowColor = [UIColor blackColor].CGColor;
+    card.layer.shadowOpacity = 0.22;
+    card.layer.shadowRadius = 24;
+    card.layer.shadowOffset = CGSizeMake(0, 10);
+    [dim addSubview:card];
+
+    CGFloat y = pad;
+
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, inner, 26)];
+    title.text = @"使用教程";
+    title.font = [UIFont boldSystemFontOfSize:19];
+    title.textColor = CLR_TEXT;
+    [card addSubview:title];
+    y += 26;
+
+    UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, inner, 20)];
+    sub.text = @"全程请保持微信挂在后台运行";
+    sub.font = [UIFont systemFontOfSize:12];
+    sub.textColor = CLR_SUB;
+    [card addSubview:sub];
+    y += 26;
+
+    for (NSArray *s in steps) {
+        UIView *row = [self tutorialRow:s[0] text:s[1] y:y width:inner color:s[2]];
+        row.frame = CGRectMake(pad, y, inner, 46);
+        [card addSubview:row];
+        y += 50;
+    }
+
+    y += 8;
+    UIView *note = [[UIView alloc] initWithFrame:CGRectMake(pad, y, inner, 58)];
+    note.backgroundColor = [UIColor colorWithRed:0.98 green:0.96 blue:0.90 alpha:1.0];
+    note.layer.cornerRadius = 12;
+    [card addSubview:note];
+
+    UILabel *noteText = [[UILabel alloc] initWithFrame:CGRectMake(12, 8, inner - 24, 44)];
+    noteText.text = @"注意：还原会把版本号恢复成官方值，之后微信会再次提示版本过低，需要重新执行第 1、2 步。";
+    noteText.numberOfLines = 0;
+    noteText.font = [UIFont systemFontOfSize:11.5];
+    noteText.textColor = [UIColor colorWithRed:0.55 green:0.42 blue:0.10 alpha:1.0];
+    [note addSubview:noteText];
+    y += 70;
+
+    UIButton *ok = [UIButton buttonWithType:UIButtonTypeSystem];
+    ok.frame = CGRectMake(pad, y, inner, 44);
+    [ok setTitle:@"我知道了" forState:UIControlStateNormal];
+    [ok setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    ok.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+    ok.backgroundColor = CLR_GREEN;
+    ok.layer.cornerRadius = 12;
+    [ok addTarget:self action:@selector(hideTutorial) forControlEvents:UIControlEventTouchUpInside];
+    [card addSubview:ok];
+
+    UITapGestureRecognizer *tap =
+        [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(hideTutorial)];
+    [dim addGestureRecognizer:tap];
+
+    [win addSubview:dim];
+    [UIView animateWithDuration:0.22 animations:^{
+        dim.alpha = 1.0;
+    }];
+}
+
+- (void)hideTutorial {
+    UIView *v = self.tutorialOverlay;
+    if (!v) return;
+    self.tutorialOverlay = nil;
+    [UIView animateWithDuration:0.18 animations:^{
+        v.alpha = 0.0;
+    } completion:^(BOOL finished) {
+        [v removeFromSuperview];
+    }];
+}
+
 #pragma mark - UI
 
 - (void)log:(NSString *)fmt, ... {
@@ -796,6 +950,8 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     [self.logView addGestureRecognizer:lp];
 
     [self refresh];
+    [self setupHelpButton];
+    [self maybeShowTutorial];
 }
 
 - (void)viewDidLayoutSubviews {
