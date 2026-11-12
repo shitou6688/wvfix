@@ -938,6 +938,14 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 
     tut.contentSize = CGSizeMake(cw, cy + 78);
 
+    // 面板高度跟随内容，避免下方留一大片空白
+    CGFloat contentH = cy + 78;
+    if (contentH < tut.frame.size.height) {
+        CGRect f = tut.frame;
+        f.size.height = contentH;
+        tut.frame = f;
+    }
+
     (void)y;
     [self refresh];
 }
