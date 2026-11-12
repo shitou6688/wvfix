@@ -573,7 +573,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
             self.currentShortVer = rs;
             self.currentBundleVer = rb;
             [self log:@"[+] 已还原，当前：显示 %@ / 上报 %@", rs ?: @"?", rb ?: @"?"];
-            [self killWeChat];
+            [self log:@"[i] 已登录的微信不受影响；还原后请勿重启微信，否则重新登录会再次提示版本过低"];
             dispatch_async(dispatch_get_main_queue(), ^{
                 self.statusLabel.text = [NSString stringWithFormat:@"显示 %@ · 上报 %@",
                                          rs ?: @"?", rb ?: @"?"];
@@ -742,7 +742,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     [card addSubview:note];
 
     UILabel *noteText = [[UILabel alloc] initWithFrame:CGRectMake(12, 8, inner - 24, 44)];
-    noteText.text = @"注意：还原会把版本号恢复成官方值，之后微信会再次提示版本过低，需要重新执行第 1、2 步。";
+    noteText.text = @"第 4 步在确认登录成功后再执行：还原只改回版本号，已登录的微信不受影响，且 plist 与签名重新一致，桌面图标也会恢复正常。注意：微信被系统回收或手动关闭后，重新登录会再次提示版本过低，届时重新执行第 1、2 步即可。";
     noteText.numberOfLines = 0;
     noteText.font = [UIFont systemFontOfSize:11.5];
     noteText.textColor = [UIColor colorWithRed:0.55 green:0.42 blue:0.10 alpha:1.0];
