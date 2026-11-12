@@ -460,11 +460,15 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
 
     errno = 0;
     int ch = chmod([[self plistPath] UTF8String], 0666);
-    [s appendFormat:@"chmod(plist,0666)=%d errno=%d %s\n", ch, errno, ch == 0 ? "ok" : strerror(errno)];
+    int chErr = errno;
+    NSString *chText = (ch == 0) ? @"ok" : [NSString stringWithUTF8String:strerror(chErr)];
+    [s appendFormat:@"chmod(plist,0666)=%d errno=%d %@\n", ch, chErr, chText];
 
     errno = 0;
     int fd = open([[self plistPath] UTF8String], O_WRONLY);
-    [s appendFormat:@"open(O_WRONLY)=%d errno=%d %s\n", fd, errno, fd >= 0 ? "ok" : strerror(errno));
+    int fdErr = errno;
+    NSString *fdText = (fd >= 0) ? @"ok" : [NSString stringWithUTF8String:strerror(fdErr)];
+    [s appendFormat:@"open(O_WRONLY)=%d errno=%d %@\n", fd, fdErr, fdText];
     if (fd >= 0) close(fd);
 
     [s appendString:@"==== end ====\n"];
