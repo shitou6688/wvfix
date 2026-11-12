@@ -1,15 +1,17 @@
 //
 //  WVFRootViewController.m
-//  微信版本伪装 — 改写 WeChat.app/Info.plist 的版本相关键
-//  v1.0.7
+//  微信版本伪装 — 批量改写 WeChat.app/Info.plist 里所有版本类字段
+//  v1.0.8
 //
-//  关键修正：微信登录上报的客户端版本取的是 WeChatBundleVersion（如 8.0.5.34），
-//  不是 CFBundleShortVersionString（那只是显示版本）。
-//  本版同时改写：
-//     CFBundleShortVersionString  显示版本
-//     WeChatBundleVersion         实际上报的构建号
+//  规则：
+//    - key 名含 "version"（不区分大小写）的都算版本字段
+//    - 但排除 MinimumOSVersion / LSMinimumSystemVersion 等含 "minimum" 的
+//      （那是最低系统要求，改高会让微信在 iOS 14 上拒绝启动）
+//    - CFBundleShortVersionString -> 输入框 1
+//    - WeChatBundleVersion        -> 输入框 2（微信登录上报的就是它）
+//    - 其余版本字段：版本串把最后一段 +100，数字类型 +1000
 //
-//  写入仍走内置 root 助手 wvfixd（目标属主 _installd，mobile 写不了）。
+//  写入仍走内置 root 助手 wvfixd（目标属主 _installd）。
 //
 
 #import <UIKit/UIKit.h>
@@ -27,6 +29,31 @@ extern char **environ;
 
 static NSString *const kDefaultShortVer  = @"8.0.90";
 static NSString *const kDefaultBundleVer = @"8.0.9.99";
+
+#pragma mark - 版本字段判定
+
+static BOOL isVersionLikeString(NSString *s) {
+    if (![s isKindOfClass:[NSString class]]) return NO;
+    if (s.length == 0 || s.length > 24) return NO;
+    NSCharacterSet *allowed = [NSCharacterSet characterSetWithCharactersInString:@"0123456789."];
+    return [[s stringByTrimmingCharactersInSet:allowed] length] == 0;
+}
+
+static BOOL shouldSkipVersionKey(NSString *key) {
+    NSString *l = key.lowercaseString;
+    if ([l containsString:@"minimum"]) return YES;      // MinimumOSVersion 等
+    if ([l containsString:@"compatible"]) return YES;
+    return NO;
+}
+
+static NSString *bumpLastComponent(NSString *v) {
+    NSMutableArray *parts = [[v componentsSeparatedByString:@"."] mutableCopy];
+    if (parts.count == 0) return v;
+    NSUInteger idx = parts.count - 1;
+    long long n = [parts[idx] longLongValue];
+    parts[idx] = [NSString stringWithFormat:@"%lld", n + 100];
+    return [parts componentsJoinedByString:@"."];
+}
 
 #pragma mark - root 通道
 
@@ -183,6 +210,20 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     return d[@"WeChatBundleVersion"];
 }
 
+// 列出所有版本类字段，返回 "key = value" 字符串数组
+- (NSArray<NSString *> *)versionKeyInventory:(NSDictionary *)dict {
+    NSMutableArray *lines = [NSMutableArray array];
+    NSArray *keys = [[dict allKeys] sortedArrayUsingSelector:@selector(compare:)];
+    for (NSString *k in keys) {
+        if (![k isKindOfClass:[NSString class]]) continue;
+        if (![k.lowercaseString containsString:@"version"]) continue;
+        id v = dict[k];
+        NSString *skip = shouldSkipVersionKey(k) ? @"  [跳过:最低系统要求]" : @"";
+        [lines addObject:[NSString stringWithFormat:@"%@ = %@%@", k, v, skip]];
+    }
+    return lines;
+}
+
 - (NSData *)buildPatchedPlistWithShort:(NSString *)shortVer
                                 bundle:(NSString *)bundleVer
                                  error:(NSString **)errOut {
@@ -192,8 +233,46 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
         return nil;
     }
 
-    dict[@"CFBundleShortVersionString"] = shortVer;
-    dict[@"WeChatBundleVersion"] = bundleVer;
+    NSArray *keys = [[dict allKeys] sortedArrayUsingSelector:@selector(compare:)];
+    NSUInteger changed = 0;
+
+    for (NSString *k in keys) {
+        if (![k isKindOfClass:[NSString class]]) continue;
+        if (![k.lowercaseString containsString:@"version"]) continue;
+        if (shouldSkipVersionKey(k)) {
+            [self log:@"  · %@ = %@（跳过）", k, dict[k]];
+            continue;
+        }
+
+        id old = dict[k];
+        id newVal = nil;
+
+        if ([k isEqualToString:@"CFBundleShortVersionString"]) {
+            newVal = shortVer;
+        } else if ([k isEqualToString:@"WeChatBundleVersion"]) {
+            newVal = bundleVer;
+        } else if (isVersionLikeString(old)) {
+            newVal = bumpLastComponent(old);
+        } else if ([old isKindOfClass:[NSNumber class]]) {
+            newVal = @([old longLongValue] + 1000);
+        } else {
+            [self log:@"  · %@ = %@（非版本格式，跳过）", k, old];
+            continue;
+        }
+
+        dict[k] = newVal;
+        changed++;
+        [self log:@"  · %@ : %@ -> %@", k, old, newVal];
+    }
+
+    // 确保上报版本键存在
+    if (!dict[@"WeChatBundleVersion"]) {
+        dict[@"WeChatBundleVersion"] = bundleVer;
+        changed++;
+        [self log:@"  · WeChatBundleVersion : (新建) -> %@", bundleVer];
+    }
+
+    [self log:@"[i] 共改写 %lu 个字段", (unsigned long)changed];
 
     NSError *err = nil;
     NSData *out = [NSPropertyListSerialization dataWithPropertyList:dict
@@ -468,7 +547,7 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     [self.view addSubview:self.bundleVerField];
     y += 46;
 
-    UIButton *doBtn = [self makeButton:@"一键改写两个版本号" action:@selector(onPatch)];
+    UIButton *doBtn = [self makeButton:@"改写全部版本字段" action:@selector(onPatch)];
     doBtn.frame = CGRectMake(16, y, w - 32, 44);
     doBtn.backgroundColor = [UIColor colorWithRed:0.13 green:0.65 blue:0.35 alpha:1.0];
     [doBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
@@ -513,9 +592,14 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     self.pathLabel.text = self.appPath;
 
     [self log:@"[+] 找到微信：%@", self.appPath];
-    [self log:@"[i] CFBundleShortVersionString = %@", self.currentShortVer ?: @"(无)"];
-    [self log:@"[i] WeChatBundleVersion        = %@", self.currentBundleVer ?: @"(无，写入时会新建)"];
     [self log:@"[i] 文件属性：%@", [self describeItem:[self plistPath]]];
+
+    NSMutableDictionary *dict = [self readPlistDict];
+    NSArray *inv = [self versionKeyInventory:dict];
+    [self log:@"[i] 版本类字段共 %lu 个：", (unsigned long)inv.count];
+    for (NSString *line in inv) {
+        [self log:@"    %@", line];
+    }
 
     resolvePersona();
     [self log:@"[i] persona 符号：%@", g_personaAvailable ? @"可用" : @"缺失"];
@@ -538,7 +622,8 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
         [self log:@"[x] 版本号不合法：%@ / %@", sVer, bVer];
         return;
     }
-    [self log:@"---- 改号 -> 显示 %@ / 上报 %@ ----", sVer, bVer];
+    [self log:@"---- 开始改写 ----"];
+    [self log:@"[i] 显示版本 -> %@ | 上报版本 -> %@", sVer, bVer];
 
     NSString *bkName = nil;
     if ([self backupNow:&bkName]) {
@@ -554,7 +639,7 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
         self.statusLabel.text = [NSString stringWithFormat:@"当前：显示 %@ / 上报 %@",
                                  self.currentShortVer ?: @"?",
                                  self.currentBundleVer ?: @"(无此键)"];
-        [self log:@"[+] 写入成功，现在读到 显示 %@ / 上报 %@",
+        [self log:@"[+] 写入成功，回读：显示 %@ / 上报 %@",
             self.currentShortVer ?: @"?", self.currentBundleVer ?: @"?"];
         [self killWeChat];
         [self log:@"[✓] 回桌面点开微信登录即可"];
