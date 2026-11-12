@@ -19,6 +19,7 @@
 #import <stdio.h>
 #import <sys/wait.h>
 #import <sys/stat.h>
+#import "WVFLicense.h"
 
 extern char **environ;
 
@@ -181,6 +182,9 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 @property (nonatomic, copy)   NSString *appPath;
 @property (nonatomic, copy)   NSString *currentShortVer;
 @property (nonatomic, copy)   NSString *currentBundleVer;
+@property (nonatomic, strong) UIView *gateView;
+@property (nonatomic, strong) UITextField *gateField;
+@property (nonatomic, strong) UILabel *gateStatus;
 @end
 
 @implementation WVFRootViewController
@@ -629,6 +633,151 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     });
 }
 
+#pragma mark - 卡密授权
+
+- (void)checkLicenseOnLaunch {
+    WVFLicense *lic = [WVFLicense shared];
+    if (![lic activated]) {
+        [self showGate:@"请输入卡密激活后使用"];
+        return;
+    }
+    [self updateLicenseIdle];
+    __weak typeof(self) weakSelf = self;
+    [lic refreshWithCompletion:^(BOOL ok, NSString *msg) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (ok) {
+                [weakSelf updateLicenseIdle];
+            } else {
+                [weakSelf showGate:msg ?: @"授权校验失败"];
+            }
+        });
+    }];
+}
+
+- (void)updateLicenseIdle {
+    NSInteger d = [[WVFLicense shared] remainDays];
+    NSString *t = (d < 0)
+        ? @"已授权（永久）· 等待操作"
+        : [NSString stringWithFormat:@"已授权 · 剩余 %ld 天 · 等待操作", (long)d];
+    [self setResult:t color:CLR_SUB];
+}
+
+- (void)showGate:(NSString *)message {
+    if (self.gateView) {
+        self.gateStatus.text = message ?: @"";
+        return;
+    }
+    UIWindow *win = self.view.window ?: [UIApplication sharedApplication].keyWindow;
+    if (!win) return;
+
+    UIView *dim = [[UIView alloc] initWithFrame:win.bounds];
+    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
+    self.gateView = dim;
+
+    CGFloat cw = win.bounds.size.width - 56;
+    if (cw > 330) cw = 330;
+    CGFloat ch = 300;
+    UIView *card = [[UIView alloc] initWithFrame:
+                    CGRectMake((win.bounds.size.width - cw) / 2,
+                               (win.bounds.size.height - ch) / 2, cw, ch)];
+    card.backgroundColor = [UIColor whiteColor];
+    card.layer.cornerRadius = 18;
+    card.layer.shadowColor = [UIColor blackColor].CGColor;
+    card.layer.shadowOpacity = 0.22;
+    card.layer.shadowRadius = 20;
+    card.layer.shadowOffset = CGSizeMake(0, 8);
+    [dim addSubview:card];
+
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(20, 26, cw - 40, 26)];
+    title.text = @"激活授权";
+    title.textAlignment = NSTextAlignmentCenter;
+    title.font = [UIFont boldSystemFontOfSize:19];
+    title.textColor = CLR_TEXT;
+    [card addSubview:title];
+
+    UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(20, 56, cw - 40, 20)];
+    sub.text = @"一机一码，激活后可在本机使用";
+    sub.textAlignment = NSTextAlignmentCenter;
+    sub.font = [UIFont systemFontOfSize:12];
+    sub.textColor = CLR_SUB;
+    [card addSubview:sub];
+
+    self.gateField = [[UITextField alloc] initWithFrame:CGRectMake(24, 96, cw - 48, 44)];
+    self.gateField.placeholder = @"WVF-XXXXX-XXXXX-XXXXX";
+    self.gateField.textAlignment = NSTextAlignmentCenter;
+    self.gateField.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters;
+    self.gateField.autocorrectionType = UITextAutocorrectionTypeNo;
+    self.gateField.font = [UIFont monospacedDigitSystemFontOfSize:15 weight:UIFontWeightMedium];
+    self.gateField.backgroundColor = [UIColor colorWithRed:0.95 green:0.97 blue:0.98 alpha:1.0];
+    self.gateField.layer.cornerRadius = 10;
+    self.gateField.layer.borderWidth = 1;
+    self.gateField.layer.borderColor = [UIColor colorWithRed:0.88 green:0.91 blue:0.93 alpha:1].CGColor;
+    [card addSubview:self.gateField];
+
+    UIButton *btn = [self smallButton:@"激活" color:CLR_GREEN action:@selector(onActivatePressed)];
+    btn.frame = CGRectMake(24, 152, cw - 48, 44);
+    btn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+    [card addSubview:btn];
+
+    self.gateStatus = [[UILabel alloc] initWithFrame:CGRectMake(24, 206, cw - 48, 44)];
+    self.gateStatus.text = message ?: @"";
+    self.gateStatus.numberOfLines = 2;
+    self.gateStatus.textAlignment = NSTextAlignmentCenter;
+    self.gateStatus.font = [UIFont systemFontOfSize:11.5];
+    self.gateStatus.textColor = CLR_RED;
+    [card addSubview:self.gateStatus];
+
+    UILabel *foot = [[UILabel alloc] initWithFrame:CGRectMake(24, 254, cw - 48, 28)];
+    NSInteger d = [[WVFLicense shared] remainDays];
+    foot.text = ([WVFLicense shared].activated && d >= 0)
+        ? [NSString stringWithFormat:@"当前授权剩余 %ld 天", (long)d]
+        : @"";
+    foot.textAlignment = NSTextAlignmentCenter;
+    foot.font = [UIFont systemFontOfSize:11];
+    foot.textColor = CLR_SUB;
+    [card addSubview:foot];
+
+    [win addSubview:dim];
+    dim.alpha = 0;
+    [UIView animateWithDuration:0.2 animations:^{ dim.alpha = 1.0; }];
+}
+
+- (void)hideGate {
+    UIView *v = self.gateView;
+    if (!v) return;
+    self.gateView = nil;
+    [UIView animateWithDuration:0.18 animations:^{ v.alpha = 0; }
+                     completion:^(BOOL finished) { [v removeFromSuperview]; }];
+}
+
+- (void)onActivatePressed {
+    NSString *k = [self.gateField.text stringByTrimmingCharactersInSet:
+                   [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (!k.length) {
+        self.gateStatus.textColor = CLR_RED;
+        self.gateStatus.text = @"请先输入卡密";
+        return;
+    }
+    self.gateStatus.textColor = CLR_SUB;
+    self.gateStatus.text = @"正在验证…";
+    [self.view endEditing:YES];
+
+    __weak typeof(self) weakSelf = self;
+    [[WVFLicense shared] activateWithKey:k completion:^(BOOL ok, NSString *msg) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (ok) {
+                [weakSelf hideGate];
+                [weakSelf updateLicenseIdle];
+                [weakSelf setResult:[NSString stringWithFormat:@"✓ %@", msg] color:CLR_GREEN];
+            } else {
+                weakSelf.gateStatus.textColor = CLR_RED;
+                weakSelf.gateStatus.text = msg ?: @"激活失败";
+            }
+        });
+    }];
+}
+
+
 #pragma mark - 日志
 
 - (void)log:(NSString *)fmt, ... {
@@ -994,6 +1143,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 
 
     [self refresh];
+    [self checkLicenseOnLaunch];
 }
 
 - (UIView *)tutorialRow:(NSString *)index text:(NSString *)text
