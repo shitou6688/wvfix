@@ -16,6 +16,7 @@
 #import "WVFLicense.h"
 #import <UIKit/UIKit.h>
 #import <Security/Security.h>
+#import <dlfcn.h>
 
 static NSString *const kWVFKey       = @"wvf_license_key";
 static NSString *const kWVFExpire    = @"wvf_license_expire";
