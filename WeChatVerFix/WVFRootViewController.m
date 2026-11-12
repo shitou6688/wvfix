@@ -815,53 +815,53 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     [self.view addSubview:card];
     self.cardView = card;
 
-    CGFloat by = 14;
+    CGFloat by = 18;
 
-    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(16, by, inner, 18)];
+    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(16, by, inner, 20)];
     t.text = @"微信版本伪装";
     t.font = [UIFont boldSystemFontOfSize:14];
     t.textColor = CLR_TEXT;
     [card addSubview:t];
 
-    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(16, by, inner, 18)];
+    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(16, by, inner, 20)];
     self.statusLabel.text = @"扫描中…";
     self.statusLabel.textAlignment = NSTextAlignmentRight;
     self.statusLabel.font = [UIFont systemFontOfSize:10];
     self.statusLabel.textColor = CLR_SUB;
     [card addSubview:self.statusLabel];
-    by += 26;
+    by += 30;
 
     CGFloat half = (inner - 10) / 2.0;
-    [card addSubview:[self tinyLabel:@"显示版本" frame:CGRectMake(16, by, half, 12)]];
+    [card addSubview:[self tinyLabel:@"显示版本" frame:CGRectMake(16, by, half, 14)]];
     [card addSubview:[self tinyLabel:@"上报版本（登录看这个）"
-                               frame:CGRectMake(16 + half + 10, by, half, 12)]];
-    by += 14;
+                               frame:CGRectMake(16 + half + 10, by, half, 14)]];
+    by += 16;
 
-    self.shortVerField = [self compactField:CGRectMake(16, by, half, 34) placeholder:@"8.0.90"];
+    self.shortVerField = [self compactField:CGRectMake(16, by, half, 40) placeholder:@"8.0.90"];
     self.shortVerField.text = kDefaultShortVer;
     [card addSubview:self.shortVerField];
 
-    self.bundleVerField = [self compactField:CGRectMake(16 + half + 10, by, half, 34)
+    self.bundleVerField = [self compactField:CGRectMake(16 + half + 10, by, half, 40)
                                 placeholder:@"8.0.99.99"];
     self.bundleVerField.text = kDefaultBundleVer;
     [card addSubview:self.bundleVerField];
-    by += 42;
+    by += 50;
 
     CGFloat bw = (inner - 16) / 3.0;
     UIButton *b1 = [self smallButton:@"改写版本" color:CLR_GREEN action:@selector(onPatch)];
-    b1.frame = CGRectMake(16, by, bw, 36);
+    b1.frame = CGRectMake(16, by, bw, 42);
     [card addSubview:b1];
 
     UIButton *b2 = [self smallButton:@"重建缓存" color:CLR_ORANGE action:@selector(onRebuildIconCache)];
-    b2.frame = CGRectMake(16 + bw + 8, by, bw, 36);
+    b2.frame = CGRectMake(16 + bw + 8, by, bw, 42);
     [card addSubview:b2];
 
     UIButton *b3 = [self smallButton:@"还原版本" color:CLR_GRAY action:@selector(onRestore)];
-    b3.frame = CGRectMake(16 + (bw + 8) * 2, by, bw, 36);
+    b3.frame = CGRectMake(16 + (bw + 8) * 2, by, bw, 42);
     [card addSubview:b3];
-    by += 44;
+    by += 52;
 
-    self.resultBanner = [[UIView alloc] initWithFrame:CGRectMake(16, by, inner, 34)];
+    self.resultBanner = [[UIView alloc] initWithFrame:CGRectMake(16, by, inner, 38)];
     self.resultBanner.backgroundColor = [CLR_GRAY colorWithAlphaComponent:0.12];
     self.resultBanner.layer.cornerRadius = 9;
     self.resultBanner.layer.borderWidth = 1.0;
@@ -880,13 +880,13 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
         [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(showLogWindow)];
     [self.resultBanner addGestureRecognizer:tap];
 
-    by += 44;
+    by += 48;
     card.frame = CGRectMake(16, topMargin, cw, by);
 
     // ---- 底部教程（紧凑，靠底） ----
-    CGFloat rowH = 38, rowGap = 10, headerH = 22, noteH = 64;
-    CGFloat tutContentH = 16 + headerH + 4 * (rowH + rowGap) + noteH + 14;
-    CGFloat tutY = self.view.bounds.size.height - 16 - tutContentH;
+    CGFloat rowH = 34, rowGap = 8, headerH = 20, noteH = 58;
+    CGFloat tutContentH = 14 + headerH + 4 * (rowH + rowGap) + noteH + 12;
+    CGFloat tutY = self.view.bounds.size.height - 14 - tutContentH;
 
     UIScrollView *tut = [[UIScrollView alloc] initWithFrame:CGRectMake(16, tutY, cw, tutContentH)];
     tut.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.88];
@@ -901,7 +901,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
         @[@"4", @"确认登录成功后，才点「还原版本」（灰色）", CLR_GRAY],
     ];
 
-    CGFloat cy = 16;
+    CGFloat cy = 14;
 
     UILabel *tTitle = [[UILabel alloc] initWithFrame:CGRectMake(16, cy, iw * 0.55, headerH)];
     tTitle.text = @"使用教程";
@@ -935,7 +935,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     noteText.font = [UIFont systemFontOfSize:10.5];
     noteText.textColor = [UIColor colorWithRed:0.55 green:0.42 blue:0.10 alpha:1.0];
     [note addSubview:noteText];
-    cy += noteH + 14;
+    cy += noteH + 12;
     tut.contentSize = CGSizeMake(cw, cy);
 
     // ---- 中间日志面板（吃满剩余空间） ----
@@ -982,7 +982,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 
 - (UIView *)tutorialRow:(NSString *)index text:(NSString *)text
                        y:(CGFloat)y width:(CGFloat)w color:(UIColor *)color {
-    UIView *row = [[UIView alloc] initWithFrame:CGRectMake(16, y, w, 38)];
+    UIView *row = [[UIView alloc] initWithFrame:CGRectMake(16, y, w, 34)];
 
     UILabel *dot = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 20, 20)];
     dot.text = index;
@@ -994,7 +994,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     dot.clipsToBounds = YES;
     [row addSubview:dot];
 
-    UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(28, 0, w - 28, 36)];
+    UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(28, 0, w - 28, 32)];
     l.text = text;
     l.numberOfLines = 2;
     l.font = [UIFont systemFontOfSize:11.5];
