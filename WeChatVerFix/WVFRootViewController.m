@@ -19,6 +19,14 @@
 
 extern char **environ;
 
+// 私有 API：以指定 persona（uid/gid=0）启动子进程，头文件默认不导出，手动声明
+extern int posix_spawnattr_set_persona_np(posix_spawnattr_t *attr, int persona, uint32_t flags);
+extern int posix_spawnattr_set_persona_uid_np(posix_spawnattr_t *attr, uid_t uid);
+extern int posix_spawnattr_set_persona_gid_np(posix_spawnattr_t *attr, gid_t gid);
+#ifndef POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE
+#define POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE 1
+#endif
+
 static NSString *const kDefaultVer = @"8.0.90";
 
 #pragma mark - 以 root 身份执行（依赖 com.apple.private.persona-mgmt）
