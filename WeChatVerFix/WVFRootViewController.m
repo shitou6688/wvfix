@@ -703,6 +703,9 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     title.font = [UIFont boldSystemFontOfSize:19];
     title.textColor = CLR_TEXT;
     [card addSubview:title];
+    title.userInteractionEnabled = YES;
+    [title addGestureRecognizer:[[UILongPressGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onSetAppID)]];
 
     UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(20, 56, cw - 40, 20)];
     sub.text = @"一机一码，激活后可在本机使用";
@@ -784,6 +787,31 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
             }
         });
     }];
+}
+
+
+- (void)onSetAppID {
+    UIAlertController *ac = [UIAlertController
+        alertControllerWithTitle:@"设置应用 ID"
+                         message:@"调试用：填服务端 yixi_apps 里本应用对应的 id"
+                  preferredStyle:UIAlertControllerStyleAlert];
+    __weak typeof(self) weakSelf = self;
+    [ac addTextFieldWithConfigurationHandler:^(UITextField *tf) {
+        tf.text = [[WVFLicense shared] appID];
+        tf.keyboardType = UIKeyboardTypeNumberPad;
+        tf.placeholder = @"例如 10002";
+    }];
+    [ac addAction:[UIAlertAction actionWithTitle:@"取消"
+                                           style:UIAlertActionStyleCancel handler:nil]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"保存"
+                                           style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+        NSString *v = [ac.textFields.firstObject.text stringByTrimmingCharactersInSet:
+                       [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        [[WVFLicense shared] setOverrideAppID:v];
+        weakSelf.gateStatus.textColor = CLR_SUB;
+        weakSelf.gateStatus.text = [NSString stringWithFormat:@"应用 ID 已设为 %@，请重新激活", v];
+    }]];
+    [self presentViewController:ac animated:YES completion:nil];
 }
 
 

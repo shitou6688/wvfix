@@ -28,6 +28,12 @@
 /// 校验（每次启动调用；失败且超出离线宽限期则视为失效）
 - (void)refreshWithCompletion:(void (^)(BOOL ok, NSString *msg))completion;
 
+/// 当前应用 ID
+- (NSString *)appID;
+
+/// 临时覆盖应用 ID（调试用，长按激活标题可设置）
+- (void)setOverrideAppID:(NSString *)appid;
+
 /// 清空本地授权（调试用）
 - (void)clear;
 
