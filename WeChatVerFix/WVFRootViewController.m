@@ -23,6 +23,7 @@
 #import <stdio.h>
 #import <sys/wait.h>
 #import <sys/stat.h>
+#import <unistd.h>
 
 extern char **environ;
 
@@ -165,6 +166,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 }
 
 @interface WVFRootViewController : UIViewController
+@property (nonatomic) dispatch_queue_t workQueue;
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UILabel *pathLabel;
 @property (nonatomic, strong) UITextField *shortVerField;
@@ -514,6 +516,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 
     NSString *helper = [self helperPath];
     if (helper.length) {
+    sleep(3);
         [self log:@"[i] 即将重启桌面（黑屏约 10 秒，属正常）"];
         int e2 = 0;
         int r2 = spawnRootFull(helper, @[@"--kill", @"SpringBoard"],
@@ -583,6 +586,9 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    if (!self.workQueue) {
+        self.workQueue = dispatch_queue_create("com.local.wvfix.patch", DISPATCH_QUEUE_SERIAL);
+    }
     self.view.backgroundColor = [UIColor whiteColor];
     self.title = @"微信版本伪装";
 
@@ -706,6 +712,10 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
         [self log:@"[x] 版本号不合法：%@ / %@", sVer, bVer];
         return;
     }
+
+    self.view.userInteractionEnabled = NO;
+    [self log:@"---- 开始改写 ----"];
+    [self log:@"[i] 显示版本 -> %@ | 上报版本 -> %@", sVer, bVer];
     if (self.currentBundleVer.length) {
         if (versionAtLeast(bVer, self.currentBundleVer)) {
             [self log:@"[i] 上报版本 %@ >= 当前 %@，方向正确", bVer, self.currentBundleVer];
@@ -713,9 +723,16 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
             [self log:@"[!] 上报版本 %@ 比当前 %@ 小，服务端可能仍判旧", bVer, self.currentBundleVer];
         }
     }
-    [self log:@"---- 开始改写 ----"];
-    [self log:@"[i] 显示版本 -> %@ | 上报版本 -> %@", sVer, bVer];
 
+    dispatch_async(self.workQueue, ^{
+        [self doPatchWorkShort:sVer bundle:bVer];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.view.userInteractionEnabled = YES;
+        });
+    });
+}
+
+- (void)doPatchWorkShort:(NSString *)sVer bundle:(NSString *)bVer {
     NSString *bkName = nil;
     if ([self backupNow:&bkName]) {
         [self log:@"[+] 备份：%@", bkName];
@@ -724,19 +741,25 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     }
 
     NSString *err = nil;
-    if ([self writeShort:sVer bundle:bVer error:&err]) {
-        self.currentShortVer = [self readVersion];
-        self.currentBundleVer = [self readWeChatBundleVersion];
-        self.statusLabel.text = [NSString stringWithFormat:@"当前：显示 %@ / 上报 %@",
-                                 self.currentShortVer ?: @"?",
-                                 self.currentBundleVer ?: @"(无此键)"];
-        [self log:@"[+] 写入成功，回读：显示 %@ / 上报 %@",
-            self.currentShortVer ?: @"?", self.currentBundleVer ?: @"?"];
-        [self refreshIconCacheAndKill];
-        [self log:@"[✓] 桌面重启后点开微信登录即可"];
-    } else {
+    if (![self writeShort:sVer bundle:bVer error:&err]) {
         [self log:@"[x] 写入失败：%@", err ?: @"未知"];
+        return;
     }
+
+    NSString *readShort = [self readVersion];
+    NSString *readBundle = [self readWeChatBundleVersion];
+    self.currentShortVer = readShort;
+    self.currentBundleVer = readBundle;
+    [self log:@"[+] 写入成功，回读：显示 %@ / 上报 %@",
+        readShort ?: @"?", readBundle ?: @"?"];
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.statusLabel.text = [NSString stringWithFormat:@"当前：显示 %@ / 上报 %@",
+                                 readShort ?: @"?", readBundle ?: @"?"];
+    });
+
+    [self refreshIconCacheAndKill];
+    [self log:@"[✓] 桌面重启后点开微信登录即可"];
 }
 
 - (void)onRestore {
@@ -746,17 +769,20 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
         return;
     }
     NSString *first = bs.firstObject;
-    if ([self restoreBackup:first]) {
-        self.currentShortVer = [self readVersion];
-        self.currentBundleVer = [self readWeChatBundleVersion];
-        self.statusLabel.text = [NSString stringWithFormat:@"当前：显示 %@ / 上报 %@",
-                                 self.currentShortVer ?: @"?",
-                                 self.currentBundleVer ?: @"(无此键)"];
-        [self log:@"[+] 已还原：%@", first];
-        [self refreshIconCacheAndKill];
-    } else {
-        [self log:@"[x] 还原失败：%@", first];
-    }
+    self.view.userInteractionEnabled = NO;
+    dispatch_async(self.workQueue, ^{
+        if ([self restoreBackup:first]) {
+            self.currentShortVer = [self readVersion];
+            self.currentBundleVer = [self readWeChatBundleVersion];
+            [self log:@"[+] 已还原：%@", first];
+            [self refreshIconCacheAndKill];
+        } else {
+            [self log:@"[x] 还原失败：%@", first];
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.view.userInteractionEnabled = YES;
+        });
+    });
 }
 
 @end
