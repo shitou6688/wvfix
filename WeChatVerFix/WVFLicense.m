@@ -247,7 +247,7 @@ static const NSTimeInterval kOfflineGrace = 3 * 86400;
         }
         if (code < 0) {
             // 网络类错误：看离线宽限期
-            NSTimeInterval last = [[NSUserDefaults standardUserDefaults] doubleForKey:kVWFLastCheck];
+            NSTimeInterval last = [[NSUserDefaults standardUserDefaults] doubleForKey:kWVFLastCheck];
             BOOL grace = ([[NSDate date] timeIntervalSince1970] - last) < kOfflineGrace;
             if (grace && [self activated]) {
                 completion(YES, @"离线校验通过");
