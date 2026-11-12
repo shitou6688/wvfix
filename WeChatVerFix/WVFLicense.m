@@ -15,11 +15,14 @@
 
 #import "WVFLicense.h"
 #import <UIKit/UIKit.h>
+#import <Security/Security.h>
 
 static NSString *const kWVFKey       = @"wvf_license_key";
 static NSString *const kWVFExpire    = @"wvf_license_expire";
 static NSString *const kWVFLastCheck = @"wvf_license_lastcheck";
 static NSString *const kWVFDevice    = @"wvf_license_device";
+static NSString *const kWVFChainService = @"com.local.wechatverfix.device";
+
 static NSString *const kWVFAppID     = @"wvf_license_appid_override";
 
 static const long long kPermanentExpire = 4102243200LL;
@@ -57,24 +60,60 @@ static const NSTimeInterval kOfflineGrace = 3 * 86400;
     else [d removeObjectForKey:kWVFAppID];
 }
 
+- (NSString *)chainDeviceID {
+    NSDictionary *q = @{
+        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+        (__bridge id)kSecAttrService: kWVFChainService,
+        (__bridge id)kSecAttrAccount: @"device",
+        (__bridge id)kSecReturnData: @YES,
+        (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitOne,
+    };
+    CFTypeRef out = NULL;
+    if (SecItemCopyMatching((__bridge CFDictionaryRef)q, &out) == errSecSuccess && out) {
+        NSData *d = (__bridge_transfer NSData *)out;
+        NSString *s = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];
+        if (s.length) return s;
+    }
+    return nil;
+}
+
+- (void)saveChainDeviceID:(NSString *)value {
+    NSDictionary *base = @{
+        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+        (__bridge id)kSecAttrService: kWVFChainService,
+        (__bridge id)kSecAttrAccount: @"device",
+    };
+    SecItemDelete((__bridge CFDictionaryRef)base);
+
+    NSMutableDictionary *add = [base mutableCopy];
+    add[(__bridge id)kSecValueData] = [value dataUsingEncoding:NSUTF8StringEncoding];
+    add[(__bridge id)kSecAttrAccessible] =
+        (__bridge id)kSecAttrAccessibleAfterFirstUnlock;
+    SecItemAdd((__bridge CFDictionaryRef)add, NULL);
+}
+
 - (NSString *)deviceID {
     static NSString *cached;
     if (cached) return cached;
 
-    NSString *v = nil;
-    @try {
-        v = [[[UIDevice currentDevice] identifierForVendor] UUIDString];
-    } @catch (NSException *e) {
-        v = nil;
-    }
+    // 1. Keychain（卸载重装仍在，恢复出厂/换机才会丢）
+    NSString *v = [self chainDeviceID];
+
+    // 2. 没有就生成一个并存进 Keychain
     if (!v.length) {
-        v = [[NSUserDefaults standardUserDefaults] stringForKey:kWVFDevice];
-        if (!v.length) {
-            v = [[NSUUID UUID] UUIDString];
-            [[NSUserDefaults standardUserDefaults] setObject:v forKey:kWVFDevice];
+        NSString *seed = nil;
+        @try {
+            seed = [[[UIDevice currentDevice] identifierForVendor] UUIDString];
+        } @catch (NSException *e) {
+            seed = nil;
         }
+        if (!seed.length) seed = [[NSUUID UUID] UUIDString];
+        v = [seed stringByReplacingOccurrencesOfString:@"-" withString:@""];
+        v = [v uppercaseString];
+        [self saveChainDeviceID:v];
     }
-    cached = [v stringByReplacingOccurrencesOfString:@"-" withString:@""];
+
+    cached = v;
     return cached;
 }
 

@@ -26,4 +26,4 @@ targets:
         GENERATE_INFOPLIST_FILE: "NO"
         ENABLE_BITCODE: "NO"
         CLANG_ENABLE_MODULES: "YES"
-        OTHER_LDFLAGS: "-framework UIKit -framework Foundation"
+        OTHER_LDFLAGS: "-framework UIKit -framework Foundation -framework Security"
