@@ -1,12 +1,15 @@
 //
 //  WVFRootViewController.m
-//  微信版本伪装 — 一键改写 WeChat.app/Info.plist 的版本号
-//  v1.0.6
+//  微信版本伪装 — 改写 WeChat.app/Info.plist 的版本相关键
+//  v1.0.7
 //
-//  实测结论：
-//   - 目标 Info.plist 属主 _installd 0644，mobile 直接写是 EACCES(13)（纯 DAC 问题）
-//   - iOS 14 的 /bin 只有 df ps，/usr/bin 无 cp/cat/dd，靠系统工具没法写文件
-//   - 因此把自带的 root 助手 wvfixd 编译进 bundle，用 persona spawn(uid=0) 执行它
+//  关键修正：微信登录上报的客户端版本取的是 WeChatBundleVersion（如 8.0.5.34），
+//  不是 CFBundleShortVersionString（那只是显示版本）。
+//  本版同时改写：
+//     CFBundleShortVersionString  显示版本
+//     WeChatBundleVersion         实际上报的构建号
+//
+//  写入仍走内置 root 助手 wvfixd（目标属主 _installd，mobile 写不了）。
 //
 
 #import <UIKit/UIKit.h>
@@ -22,7 +25,8 @@
 
 extern char **environ;
 
-static NSString *const kDefaultVer = @"8.0.90";
+static NSString *const kDefaultShortVer  = @"8.0.90";
+static NSString *const kDefaultBundleVer = @"8.0.9.99";
 
 #pragma mark - root 通道
 
@@ -106,10 +110,12 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
 @interface WVFRootViewController : UIViewController
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UILabel *pathLabel;
-@property (nonatomic, strong) UITextField *verField;
+@property (nonatomic, strong) UITextField *shortVerField;
+@property (nonatomic, strong) UITextField *bundleVerField;
 @property (nonatomic, strong) UITextView *logView;
 @property (nonatomic, copy)   NSString *appPath;
-@property (nonatomic, copy)   NSString *currentVer;
+@property (nonatomic, copy)   NSString *currentShortVer;
+@property (nonatomic, copy)   NSString *currentBundleVer;
 @end
 
 @implementation WVFRootViewController
@@ -155,36 +161,41 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     return [[NSBundle mainBundle] pathForResource:@"wvfixd" ofType:nil];
 }
 
-#pragma mark - 读写版本号
+#pragma mark - 读写
 
-- (NSString *)readVersion {
+- (NSMutableDictionary *)readPlistDict {
     NSData *data = [NSData dataWithContentsOfFile:[self plistPath]];
     if (!data) return nil;
-    NSDictionary *dict = [NSPropertyListSerialization propertyListWithData:data
-                                                                  options:0
-                                                                   format:NULL
-                                                                    error:NULL];
-    return dict[@"CFBundleShortVersionString"];
+    id obj = [NSPropertyListSerialization propertyListWithData:data
+                                                      options:NSPropertyListMutableContainersAndLeaves
+                                                       format:NULL
+                                                        error:NULL];
+    return [obj isKindOfClass:[NSMutableDictionary class]] ? obj : nil;
 }
 
-- (NSData *)buildPatchedPlist:(NSString *)newVer error:(NSString **)errOut {
-    NSData *data = [NSData dataWithContentsOfFile:[self plistPath]];
-    if (!data) {
-        if (errOut) *errOut = @"读不到 Info.plist";
-        return nil;
-    }
-    NSError *err = nil;
-    NSMutableDictionary *dict =
-        [NSPropertyListSerialization propertyListWithData:data
-                                                  options:NSPropertyListMutableContainersAndLeaves
-                                                   format:NULL
-                                                    error:&err];
-    if (![dict isKindOfClass:[NSMutableDictionary class]]) {
-        if (errOut) *errOut = err.localizedDescription ?: @"plist 解析失败";
-        return nil;
-    }
-    dict[@"CFBundleShortVersionString"] = newVer;
+- (NSString *)readVersion {
+    NSDictionary *d = [self readPlistDict];
+    return d[@"CFBundleShortVersionString"];
+}
 
+- (NSString *)readWeChatBundleVersion {
+    NSDictionary *d = [self readPlistDict];
+    return d[@"WeChatBundleVersion"];
+}
+
+- (NSData *)buildPatchedPlistWithShort:(NSString *)shortVer
+                                bundle:(NSString *)bundleVer
+                                 error:(NSString **)errOut {
+    NSMutableDictionary *dict = [self readPlistDict];
+    if (!dict) {
+        if (errOut) *errOut = @"读不到或解析不了 Info.plist";
+        return nil;
+    }
+
+    dict[@"CFBundleShortVersionString"] = shortVer;
+    dict[@"WeChatBundleVersion"] = bundleVer;
+
+    NSError *err = nil;
     NSData *out = [NSPropertyListSerialization dataWithPropertyList:dict
                                                              format:NSPropertyListBinaryFormat_v1_0
                                                             options:0
@@ -218,14 +229,13 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
             a[NSFilePosixPermissions]];
 }
 
-// 通过自带 root 助手覆盖目标文件
 - (BOOL)rootWriteViaHelper:(NSData *)data {
     NSFileManager *fm = [NSFileManager defaultManager];
     [fm createDirectoryAtPath:[self workDir] withIntermediateDirectories:YES attributes:nil error:NULL];
 
     NSString *helper = [self helperPath];
     if (!helper.length || ![fm fileExistsAtPath:helper]) {
-        [self log:@"[!] 找不到 root 助手 wvfixd（bundle 里没有）"];
+        [self log:@"[!] 找不到 root 助手 wvfixd"];
         return NO;
     }
 
@@ -239,16 +249,8 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     int err = 0;
     int rc = spawnRootFull(helper, @[tmp, [self plistPath]],
                            WVF_PERSONA_FLAGS_OVERRIDE, nil, &err);
-    NSString *errText = [NSString stringWithFormat:@"rc=%d spawnErr=%d", rc, err];
-    [self log:@"[i] root 助手：%@", errText];
-
-    if (rc == 0) return YES;
-
-    if (err != 0) {
-        NSString *e = [NSString stringWithFormat:@"posix_spawn errno=%d", err];
-        [self log:@"[!] %@", e];
-    }
-    return NO;
+    [self log:@"[i] root 助手：rc=%d spawnErr=%d", rc, err];
+    return rc == 0;
 }
 
 - (void)probeRoot {
@@ -269,22 +271,20 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     }
 }
 
-- (BOOL)writeVersion:(NSString *)newVer error:(NSString **)errOut {
+- (BOOL)writeShort:(NSString *)shortVer bundle:(NSString *)bundleVer error:(NSString **)errOut {
     NSString *buildErr = nil;
-    NSData *out = [self buildPatchedPlist:newVer error:&buildErr];
+    NSData *out = [self buildPatchedPlistWithShort:shortVer bundle:bundleVer error:&buildErr];
     if (!out) {
         if (errOut) *errOut = buildErr ?: @"生成新 plist 失败";
         return NO;
     }
     NSString *p = [self plistPath];
 
-    // 1) root 助手（唯一可靠路径）
     if ([self rootWriteViaHelper:out]) {
         [self log:@"[i] 写入方式：root 助手"];
         return YES;
     }
 
-    // 2) 就地写（万一权限变了）
     if ([self writeInPlace:out toPath:p]) {
         [self log:@"[i] 写入方式：就地写"];
         return YES;
@@ -293,7 +293,6 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     NSString *e1Text = [NSString stringWithUTF8String:strerror(e1)];
     [self log:@"[!] 就地写失败 errno=%d %@", e1, e1Text];
 
-    // 3) 原子写
     NSError *e2 = nil;
     if ([out writeToFile:p options:0 error:&e2]) {
         [self log:@"[i] 写入方式：原子写"];
@@ -409,12 +408,21 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     pb.string = self.logView.text ?: @"";
     UIAlertController *ac = [UIAlertController
         alertControllerWithTitle:@"已复制"
-                         message:@"全部日志已复制到剪贴板，可以直接粘贴发送"
+                         message:@"全部日志已复制到剪贴板"
                   preferredStyle:UIAlertControllerStyleAlert];
     [ac addAction:[UIAlertAction actionWithTitle:@"好"
                                            style:UIAlertActionStyleDefault
                                          handler:nil]];
     [self presentViewController:ac animated:YES completion:nil];
+}
+
+- (UILabel *)makeFieldLabel:(NSString *)text y:(CGFloat)y width:(CGFloat)w {
+    UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(16, y, w - 32, 18)];
+    l.font = [UIFont systemFontOfSize:11];
+    l.textColor = [UIColor darkGrayColor];
+    l.text = text;
+    [self.view addSubview:l];
+    return l;
 }
 
 - (void)viewDidLoad {
@@ -423,50 +431,63 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     self.title = @"微信版本伪装";
 
     CGFloat w = self.view.bounds.size.width;
-    CGFloat y = 88;
+    CGFloat y = 84;
 
-    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(16, y, w - 32, 26)];
-    self.statusLabel.font = [UIFont boldSystemFontOfSize:16];
+    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(16, y, w - 32, 24)];
+    self.statusLabel.font = [UIFont boldSystemFontOfSize:15];
     self.statusLabel.text = @"正在扫描微信…";
     [self.view addSubview:self.statusLabel];
-    y += 30;
+    y += 26;
 
-    self.pathLabel = [[UILabel alloc] initWithFrame:CGRectMake(16, y, w - 32, 34)];
+    self.pathLabel = [[UILabel alloc] initWithFrame:CGRectMake(16, y, w - 32, 28)];
     self.pathLabel.font = [UIFont systemFontOfSize:9];
     self.pathLabel.textColor = [UIColor grayColor];
     self.pathLabel.numberOfLines = 2;
     [self.view addSubview:self.pathLabel];
-    y += 40;
+    y += 34;
 
-    self.verField = [[UITextField alloc] initWithFrame:CGRectMake(16, y, w - 32, 40)];
-    self.verField.borderStyle = UITextBorderStyleRoundedRect;
-    self.verField.placeholder = @"目标版本号";
-    self.verField.text = kDefaultVer;
-    self.verField.keyboardType = UIKeyboardTypeNumbersAndPunctuation;
-    self.verField.textAlignment = NSTextAlignmentCenter;
-    [self.view addSubview:self.verField];
-    y += 48;
+    [self makeFieldLabel:@"显示版本  CFBundleShortVersionString" y:y width:w];
+    y += 20;
+    self.shortVerField = [[UITextField alloc] initWithFrame:CGRectMake(16, y, w - 32, 38)];
+    self.shortVerField.borderStyle = UITextBorderStyleRoundedRect;
+    self.shortVerField.placeholder = @"例如 8.0.90";
+    self.shortVerField.text = kDefaultShortVer;
+    self.shortVerField.keyboardType = UIKeyboardTypeNumbersAndPunctuation;
+    self.shortVerField.textAlignment = NSTextAlignmentCenter;
+    [self.view addSubview:self.shortVerField];
+    y += 44;
 
-    UIButton *doBtn = [self makeButton:@"一键改成这个版本" action:@selector(onPatch)];
-    doBtn.frame = CGRectMake(16, y, w - 32, 46);
+    [self makeFieldLabel:@"上报版本  WeChatBundleVersion（登录校验看这个）" y:y width:w];
+    y += 20;
+    self.bundleVerField = [[UITextField alloc] initWithFrame:CGRectMake(16, y, w - 32, 38)];
+    self.bundleVerField.borderStyle = UITextBorderStyleRoundedRect;
+    self.bundleVerField.placeholder = @"例如 8.0.9.99";
+    self.bundleVerField.text = kDefaultBundleVer;
+    self.bundleVerField.keyboardType = UIKeyboardTypeNumbersAndPunctuation;
+    self.bundleVerField.textAlignment = NSTextAlignmentCenter;
+    [self.view addSubview:self.bundleVerField];
+    y += 46;
+
+    UIButton *doBtn = [self makeButton:@"一键改写两个版本号" action:@selector(onPatch)];
+    doBtn.frame = CGRectMake(16, y, w - 32, 44);
     doBtn.backgroundColor = [UIColor colorWithRed:0.13 green:0.65 blue:0.35 alpha:1.0];
     [doBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     [self.view addSubview:doBtn];
-    y += 52;
+    y += 50;
 
     CGFloat half = (w - 32 - 10) / 2.0;
     UIButton *restoreBtn = [self makeButton:@"还原到改前版本" action:@selector(onRestore)];
-    restoreBtn.frame = CGRectMake(16, y, half, 40);
+    restoreBtn.frame = CGRectMake(16, y, half, 38);
     [self.view addSubview:restoreBtn];
 
     UIButton *copyBtn = [self makeButton:@"复制全部日志" action:@selector(copyLog)];
-    copyBtn.frame = CGRectMake(16 + half + 10, y, half, 40);
+    copyBtn.frame = CGRectMake(16 + half + 10, y, half, 38);
     copyBtn.backgroundColor = [UIColor colorWithWhite:0.88 alpha:1.0];
     [self.view addSubview:copyBtn];
-    y += 48;
+    y += 44;
 
     self.logView = [[UITextView alloc] initWithFrame:CGRectMake(12, y, w - 24,
-                                                               self.view.bounds.size.height - y - 16)];
+                                                               self.view.bounds.size.height - y - 14)];
     self.logView.editable = NO;
     self.logView.font = [UIFont fontWithName:@"Menlo" size:10] ?: [UIFont systemFontOfSize:10];
     self.logView.backgroundColor = [UIColor colorWithWhite:0.96 alpha:1.0];
@@ -484,18 +505,20 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
         [self log:@"[x] 扫描失败：没有 WeChat.app"];
         return;
     }
-    self.currentVer = [self readVersion];
-    self.statusLabel.text = [NSString stringWithFormat:@"当前版本：%@", self.currentVer ?: @"未知"];
+    self.currentShortVer = [self readVersion];
+    self.currentBundleVer = [self readWeChatBundleVersion];
+    self.statusLabel.text = [NSString stringWithFormat:@"当前：显示 %@ / 上报 %@",
+                             self.currentShortVer ?: @"?",
+                             self.currentBundleVer ?: @"(无此键)"];
     self.pathLabel.text = self.appPath;
+
     [self log:@"[+] 找到微信：%@", self.appPath];
-    [self log:@"[i] 当前版本：%@", self.currentVer ?: @"未知"];
+    [self log:@"[i] CFBundleShortVersionString = %@", self.currentShortVer ?: @"(无)"];
+    [self log:@"[i] WeChatBundleVersion        = %@", self.currentBundleVer ?: @"(无，写入时会新建)"];
     [self log:@"[i] 文件属性：%@", [self describeItem:[self plistPath]]];
-    [self log:@"[i] 目录属性：%@",
-        [self describeItem:[[self plistPath] stringByDeletingLastPathComponent]]];
 
     resolvePersona();
     [self log:@"[i] persona 符号：%@", g_personaAvailable ? @"可用" : @"缺失"];
-    [self log:@"[i] 助手路径：%@", [self helperPath] ?: @"(缺失)"];
 
     [[NSFileManager defaultManager] createDirectoryAtPath:[self workDir]
                              withIntermediateDirectories:YES attributes:nil error:NULL];
@@ -507,13 +530,15 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
         [self log:@"[x] 还没找到微信"];
         return;
     }
-    NSString *ver = [self.verField.text stringByTrimmingCharactersInSet:
-                     [NSCharacterSet whitespaceCharacterSet]];
-    if (ver.length < 3) {
-        [self log:@"[x] 版本号不合法：%@", ver];
+    NSString *sVer = [self.shortVerField.text stringByTrimmingCharactersInSet:
+                      [NSCharacterSet whitespaceCharacterSet]];
+    NSString *bVer = [self.bundleVerField.text stringByTrimmingCharactersInSet:
+                      [NSCharacterSet whitespaceCharacterSet]];
+    if (sVer.length < 3 || bVer.length < 3) {
+        [self log:@"[x] 版本号不合法：%@ / %@", sVer, bVer];
         return;
     }
-    [self log:@"---- 开始改号 -> %@ ----", ver];
+    [self log:@"---- 改号 -> 显示 %@ / 上报 %@ ----", sVer, bVer];
 
     NSString *bkName = nil;
     if ([self backupNow:&bkName]) {
@@ -523,10 +548,14 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     }
 
     NSString *err = nil;
-    if ([self writeVersion:ver error:&err]) {
-        self.currentVer = [self readVersion];
-        self.statusLabel.text = [NSString stringWithFormat:@"当前版本：%@", self.currentVer ?: @"?"];
-        [self log:@"[+] 写入成功，现在读到 %@", self.currentVer ?: @"?"];
+    if ([self writeShort:sVer bundle:bVer error:&err]) {
+        self.currentShortVer = [self readVersion];
+        self.currentBundleVer = [self readWeChatBundleVersion];
+        self.statusLabel.text = [NSString stringWithFormat:@"当前：显示 %@ / 上报 %@",
+                                 self.currentShortVer ?: @"?",
+                                 self.currentBundleVer ?: @"(无此键)"];
+        [self log:@"[+] 写入成功，现在读到 显示 %@ / 上报 %@",
+            self.currentShortVer ?: @"?", self.currentBundleVer ?: @"?"];
         [self killWeChat];
         [self log:@"[✓] 回桌面点开微信登录即可"];
     } else {
@@ -542,8 +571,11 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     }
     NSString *first = bs.firstObject;
     if ([self restoreBackup:first]) {
-        self.currentVer = [self readVersion];
-        self.statusLabel.text = [NSString stringWithFormat:@"当前版本：%@", self.currentVer ?: @"?"];
+        self.currentShortVer = [self readVersion];
+        self.currentBundleVer = [self readWeChatBundleVersion];
+        self.statusLabel.text = [NSString stringWithFormat:@"当前：显示 %@ / 上报 %@",
+                                 self.currentShortVer ?: @"?",
+                                 self.currentBundleVer ?: @"(无此键)"];
         [self log:@"[+] 已还原：%@", first];
         [self killWeChat];
     } else {
