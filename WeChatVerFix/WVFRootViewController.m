@@ -1,24 +1,87 @@
 //
 //  WVFRootViewController.m
 //  微信版本伪装 — 一键改写 WeChat.app/Info.plist 的版本号
-//  v1.0.2
-//  entitlements 与 v1.0.0 完全一致（v1.0.0 启动正常）。
-//  唯一行为差异：写入改用就地写（open + write），不再用 atomically:YES，
-//  因为原子写会先建临时文件再 rename，那一步需要目录写权限；
-//  直接覆盖已有文件只需要文件写权限。
+//  v1.0.3
+//
+//  实测结论：目标文件属主是 _installd、0644，目录 _installd 0755，
+//  普通 mobile 进程无论如何都写不进去（需要 root）。
+//  因此本版增加 root 通道：persona spawn（uid/gid=0）执行 /bin/cp 覆盖。
+//  私有符号用 dlsym 动态解析，缺失时只降级、不会因链接失败而闪退。
 //
 
 #import <UIKit/UIKit.h>
 #import <spawn.h>
 #import <dispatch/dispatch.h>
+#import <dlfcn.h>
 #import <fcntl.h>
 #import <unistd.h>
 #import <errno.h>
 #import <string.h>
+#import <sys/wait.h>
 
 extern char **environ;
 
 static NSString *const kDefaultVer = @"8.0.90";
+
+#pragma mark - root 通道（dlsym，符号缺失也不会崩）
+
+typedef int (*persona_np_fn)(posix_spawnattr_t *, int, uint32_t);
+typedef int (*persona_id_fn)(posix_spawnattr_t *, id_t);
+
+static persona_np_fn g_setPersona = NULL;
+static persona_id_fn g_setPersonaUid = NULL;
+static persona_id_fn g_setPersonaGid = NULL;
+static BOOL g_personaResolved = NO;
+static BOOL g_personaAvailable = NO;
+
+static void resolvePersona(void) {
+    if (g_personaResolved) return;
+    g_personaResolved = YES;
+
+    void *h = dlopen("/usr/lib/libSystem.B.dylib", RTLD_LAZY);
+    if (!h) h = dlopen(NULL, RTLD_LAZY);
+
+    g_setPersona    = (persona_np_fn)dlsym(h, "posix_spawnattr_set_persona_np");
+    g_setPersonaUid = (persona_id_fn)dlsym(h, "posix_spawnattr_set_persona_uid_np");
+    g_setPersonaGid = (persona_id_fn)dlsym(h, "posix_spawnattr_set_persona_gid_np");
+
+    g_personaAvailable = (g_setPersona && g_setPersonaUid && g_setPersonaGid);
+}
+
+#define WVF_PERSONA_FLAGS_OVERRIDE 1
+
+// 以 uid/gid=0 执行一个外部程序，返回 exit code；<0 表示根本没起来
+static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
+    resolvePersona();
+    if (!g_personaAvailable) return -1;
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) return -2;
+
+    NSMutableArray *argv = [NSMutableArray arrayWithObject:path];
+    [argv addObjectsFromArray:args];
+
+    char **cargv = (char **)calloc(argv.count + 1, sizeof(char *));
+    for (NSUInteger i = 0; i < argv.count; i++) cargv[i] = strdup([argv[i] UTF8String]);
+    cargv[argv.count] = NULL;
+
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+    g_setPersona(&attr, 99, WVF_PERSONA_FLAGS_OVERRIDE);
+    g_setPersonaUid(&attr, 0);
+    g_setPersonaGid(&attr, 0);
+
+    pid_t pid = 0;
+    int rc = posix_spawn(&pid, cargv[0], NULL, &attr, cargv, environ);
+    posix_spawnattr_destroy(&attr);
+
+    for (NSUInteger i = 0; i < argv.count; i++) free(cargv[i]);
+    free(cargv);
+
+    if (rc != 0) return -1000 - rc;
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -3;
+}
 
 @interface WVFRootViewController : UIViewController
 @property (nonatomic, strong) UILabel *statusLabel;
@@ -106,19 +169,14 @@ static NSString *const kDefaultVer = @"8.0.90";
     return out;
 }
 
-// 就地写：只要求文件本身可写，不需要目录写权限
 - (BOOL)writeInPlace:(NSData *)data toPath:(NSString *)path {
     int fd = open(path.UTF8String, O_WRONLY | O_TRUNC);
     if (fd < 0) return NO;
-
     const uint8_t *bytes = (const uint8_t *)data.bytes;
     size_t left = data.length;
     while (left > 0) {
         ssize_t n = write(fd, bytes, left);
-        if (n <= 0) {
-            close(fd);
-            return NO;
-        }
+        if (n <= 0) { close(fd); return NO; }
         bytes += n;
         left -= (size_t)n;
     }
@@ -136,6 +194,42 @@ static NSString *const kDefaultVer = @"8.0.90";
             a[NSFilePosixPermissions]];
 }
 
+// 把内容写到 mobile 可写的目录，再由 root 覆盖目标
+- (BOOL)rootCopyFallback:(NSData *)data {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    [fm createDirectoryAtPath:[self workDir] withIntermediateDirectories:YES attributes:nil error:NULL];
+
+    NSString *tmp = [[self workDir] stringByAppendingPathComponent:@"patch.tmp.plist"];
+    [fm removeItemAtPath:tmp error:NULL];
+    if (![data writeToFile:tmp atomically:YES]) {
+        [self log:@"[!] 临时文件写入失败"];
+        return NO;
+    }
+    [self log:@"[i] 临时文件已写：%@", tmp];
+
+    // 优先 cp，其次 cat
+    NSArray *cands = @[
+        @[@"/bin/cp", tmp, [self plistPath]],
+        @[@"/usr/bin/cp", tmp, [self plistPath]],
+        @[@"/bin/cat", tmp],
+    ];
+
+    for (NSArray *c in cands) {
+        NSString *tool = c[0];
+        if (![fm fileExistsAtPath:tool]) continue;
+
+        if ([tool hasSuffix:@"cat"]) {
+            // cat 需要 shell 重定向，iOS 无 sh，跳过
+            continue;
+        }
+        NSArray *args = [c subarrayWithRange:NSMakeRange(1, c.count - 1)];
+        int rc = spawnRoot(tool, args);
+        [self log:@"[i] root %@：rc=%d", [tool lastPathComponent], rc];
+        if (rc == 0) return YES;
+    }
+    return NO;
+}
+
 - (BOOL)writeVersion:(NSString *)newVer error:(NSString **)errOut {
     NSString *buildErr = nil;
     NSData *out = [self buildPatchedPlist:newVer error:&buildErr];
@@ -145,26 +239,26 @@ static NSString *const kDefaultVer = @"8.0.90";
     }
     NSString *p = [self plistPath];
 
-    // 1) 就地写（首选）
+    // 1) 就地写
     if ([self writeInPlace:out toPath:p]) {
-        [self log:@"[i] 写入方式：就地写"];
+        [self log:@"[i] 写入方式：就地写（当前用户）"];
         return YES;
     }
     int e1 = errno;
     [self log:@"[!] 就地写失败 errno=%d (%s)", e1, strerror(e1)];
 
-    // 2) 原子写（目录可写时可行）
-    NSError *e2 = nil;
-    if ([out writeToFile:p options:0 error:&e2]) {
-        [self log:@"[i] 写入方式：原子写"];
+    // 2) root 通道
+    if ([self rootCopyFallback:out]) {
+        [self log:@"[i] 写入方式：root cp"];
         return YES;
     }
-    [self log:@"[!] 原子写失败：%@", e2.localizedDescription ?: @"?"];
 
     // 3) 诊断
     NSMutableString *diag = [NSMutableString string];
-    [diag appendFormat:@"两种写入都失败\n文件 %@\n目录 %@",
-        [self describeItem:p], [self describeItem:[p stringByDeletingLastPathComponent]]];
+    [diag appendFormat:@"就地写与 root 通道均失败\n文件 %@\n目录 %@\npersona 符号=%d",
+        [self describeItem:p],
+        [self describeItem:[p stringByDeletingLastPathComponent]],
+        g_personaAvailable ? 1 : 0];
     if (errOut) *errOut = diag;
     return NO;
 }
@@ -174,9 +268,7 @@ static NSString *const kDefaultVer = @"8.0.90";
 - (BOOL)backupNow:(NSString **)msgOut {
     NSFileManager *fm = [NSFileManager defaultManager];
     if (![fm createDirectoryAtPath:[self backupDir]
-       withIntermediateDirectories:YES
-                        attributes:nil
-                             error:NULL]) {
+       withIntermediateDirectories:YES attributes:nil error:NULL]) {
         if (msgOut) *msgOut = @"建不了备份目录";
         return NO;
     }
@@ -222,16 +314,24 @@ static NSString *const kDefaultVer = @"8.0.90";
     NSData *d = [NSData dataWithContentsOfFile:src];
     if (!d) return NO;
     if ([self writeInPlace:d toPath:[self plistPath]]) return YES;
-    return [d writeToFile:[self plistPath] options:0 error:NULL];
+    return [self rootCopyFallback:d];
 }
 
 #pragma mark - 杀进程
 
 - (void)killWeChat {
+    int rc = spawnRoot(@"/usr/bin/killall", @[@"-9", @"WeChat"]);
+    if (rc == 0) {
+        [self log:@"已结束微信进程"];
+        return;
+    }
     pid_t pid = 0;
     char *argv[] = { (char *)"killall", (char *)"-9", (char *)"WeChat", NULL };
-    int r = posix_spawn(&pid, "/usr/bin/killall", NULL, NULL, argv, environ);
-    [self log:(r == 0 ? @"已结束微信进程" : @"结束进程失败，请手动上滑关掉微信")];
+    if (posix_spawn(&pid, "/usr/bin/killall", NULL, NULL, argv, environ) == 0) {
+        [self log:@"已结束微信进程（当前用户）"];
+        return;
+    }
+    [self log:@"结束进程失败，请手动上滑关掉微信"];
 }
 
 #pragma mark - UI
@@ -328,8 +428,13 @@ static NSString *const kDefaultVer = @"8.0.90";
     [self log:@"[+] 找到微信：%@", self.appPath];
     [self log:@"[i] 当前版本：%@", self.currentVer ?: @"未知"];
     [self log:@"[i] 文件属性：%@", [self describeItem:[self plistPath]]];
-    [self log:@"[i] 目录属性：%@",
-        [self describeItem:[[self plistPath] stringByDeletingLastPathComponent]]];
+
+    resolvePersona();
+    [self log:@"[i] persona 符号：%@", g_personaAvailable ? @"可用" : @"缺失"];
+    if (g_personaAvailable) {
+        int rc = spawnRoot(@"/bin/ls", @[@"/"]);
+        [self log:@"[i] root 探测 /bin/ls：rc=%d", rc];
+    }
 }
 
 - (void)onPatch {
