@@ -866,7 +866,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     self.resultBanner.layer.cornerRadius = 9;
     self.resultBanner.layer.borderWidth = 1.0;
     self.resultBanner.layer.borderColor = [CLR_GRAY colorWithAlphaComponent:0.35].CGColor;
-    self.resultBanner.alpha = 0.0;
+    self.resultBanner.alpha = 1.0;
     [card addSubview:self.resultBanner];
 
     self.resultLabel = [[UILabel alloc] initWithFrame:CGRectMake(10, 0, inner - 20, 34)];
@@ -875,6 +875,8 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     self.resultLabel.textAlignment = NSTextAlignmentCenter;
     self.resultLabel.numberOfLines = 2;
     [self.resultBanner addSubview:self.resultLabel];
+    self.resultLabel.text = @"等待操作";
+    self.resultLabel.textColor = CLR_SUB;
 
     UITapGestureRecognizer *tap =
         [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(showLogWindow)];
