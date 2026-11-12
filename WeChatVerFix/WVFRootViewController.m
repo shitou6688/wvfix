@@ -1,17 +1,15 @@
 //
 //  WVFRootViewController.m
 //  微信版本伪装 — 批量改写 WeChat.app/Info.plist 里所有版本类字段
-//  v1.0.8
+//  v1.1.1
 //
-//  规则：
-//    - key 名含 "version"（不区分大小写）的都算版本字段
-//    - 但排除 MinimumOSVersion / LSMinimumSystemVersion 等含 "minimum" 的
-//      （那是最低系统要求，改高会让微信在 iOS 14 上拒绝启动）
-//    - CFBundleShortVersionString -> 输入框 1
-//    - WeChatBundleVersion        -> 输入框 2（微信登录上报的就是它）
-//    - 其余版本字段：版本串把最后一段 +100，数字类型 +1000
-//
-//  写入仍走内置 root 助手 wvfixd（目标属主 _installd）。
+//  关键点（都是实测踩出来的）：
+//   1) 目标 Info.plist 属主 _installd 0644，mobile 写不了 -> 走自带 root 助手 wvfixd
+//   2) iOS 没有 /usr/bin/killall，也没有 cp/cat/dd -> 杀进程也用 wvfixd
+//   3) 改完必须杀掉微信（进程内 NSBundle 缓存旧版本号）
+//   4) 还要重建图标缓存，否则 LaunchServices 快照失效、桌面图标点不动
+//      TrollStore 那个按钮实际执行的是 trollstorehelper refresh-all（不是 uicache）
+//   5) 最后杀 SpringBoard 触发黑屏重建，让注册状态彻底刷新
 //
 
 #import <UIKit/UIKit.h>
@@ -22,6 +20,7 @@
 #import <unistd.h>
 #import <errno.h>
 #import <string.h>
+#import <stdio.h>
 #import <sys/wait.h>
 #import <sys/stat.h>
 
@@ -30,7 +29,7 @@ extern char **environ;
 static NSString *const kDefaultShortVer  = @"8.0.90";
 static NSString *const kDefaultBundleVer = @"8.0.99.99";
 
-#pragma mark - 版本字段判定
+#pragma mark - 版本字段工具
 
 static BOOL isVersionLikeString(NSString *s) {
     if (![s isKindOfClass:[NSString class]]) return NO;
@@ -41,7 +40,7 @@ static BOOL isVersionLikeString(NSString *s) {
 
 static BOOL shouldSkipVersionKey(NSString *key) {
     NSString *l = key.lowercaseString;
-    if ([l containsString:@"minimum"]) return YES;      // MinimumOSVersion 等
+    if ([l containsString:@"minimum"]) return YES;
     if ([l containsString:@"compatible"]) return YES;
     return NO;
 }
@@ -55,7 +54,6 @@ static NSString *bumpLastComponent(NSString *v) {
     return [parts componentsJoinedByString:@"."];
 }
 
-// 拆成数字段
 static NSArray<NSNumber *> *numComponents(NSString *v) {
     NSMutableArray *r = [NSMutableArray array];
     for (NSString *p in [v componentsSeparatedByString:@"."]) {
@@ -166,10 +164,6 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     return -1;
 }
 
-static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
-    return spawnRootFull(path, args, WVF_PERSONA_FLAGS_OVERRIDE, nil, NULL);
-}
-
 @interface WVFRootViewController : UIViewController
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UILabel *pathLabel;
@@ -224,6 +218,25 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     return [[NSBundle mainBundle] pathForResource:@"wvfixd" ofType:nil];
 }
 
+- (NSString *)trollStoreHelperPath {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    for (NSString *root in [self searchRoots]) {
+        for (NSString *d in [fm contentsOfDirectoryAtPath:root error:nil]) {
+            NSString *hp = [[root stringByAppendingPathComponent:d]
+                            stringByAppendingPathComponent:@"TrollStore.app/trollstorehelper"];
+            if ([fm fileExistsAtPath:hp]) return hp;
+        }
+    }
+    NSArray *fixed = @[
+        @"/var/jb/Applications/TrollStore.app/trollstorehelper",
+        @"/Applications/TrollStore.app/trollstorehelper",
+    ];
+    for (NSString *p in fixed) {
+        if ([fm fileExistsAtPath:p]) return p;
+    }
+    return nil;
+}
+
 #pragma mark - 读写
 
 - (NSMutableDictionary *)readPlistDict {
@@ -237,25 +250,21 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
 }
 
 - (NSString *)readVersion {
-    NSDictionary *d = [self readPlistDict];
-    return d[@"CFBundleShortVersionString"];
+    return [self readPlistDict][@"CFBundleShortVersionString"];
 }
 
 - (NSString *)readWeChatBundleVersion {
-    NSDictionary *d = [self readPlistDict];
-    return d[@"WeChatBundleVersion"];
+    return [self readPlistDict][@"WeChatBundleVersion"];
 }
 
-// 列出所有版本类字段，返回 "key = value" 字符串数组
 - (NSArray<NSString *> *)versionKeyInventory:(NSDictionary *)dict {
     NSMutableArray *lines = [NSMutableArray array];
     NSArray *keys = [[dict allKeys] sortedArrayUsingSelector:@selector(compare:)];
     for (NSString *k in keys) {
         if (![k isKindOfClass:[NSString class]]) continue;
         if (![k.lowercaseString containsString:@"version"]) continue;
-        id v = dict[k];
         NSString *skip = shouldSkipVersionKey(k) ? @"  [跳过:最低系统要求]" : @"";
-        [lines addObject:[NSString stringWithFormat:@"%@ = %@%@", k, v, skip]];
+        [lines addObject:[NSString stringWithFormat:@"%@ = %@%@", k, dict[k], skip]];
     }
     return lines;
 }
@@ -301,7 +310,6 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
         [self log:@"  · %@ : %@ -> %@", k, old, newVal];
     }
 
-    // 确保上报版本键存在
     if (!dict[@"WeChatBundleVersion"]) {
         dict[@"WeChatBundleVersion"] = bundleVer;
         changed++;
@@ -475,61 +483,43 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     return [self writeInPlace:d toPath:[self plistPath]];
 }
 
-// 定位 TrollStore 的 root helper（它就在 TrollStore.app 里）
-- (NSString *)trollStoreHelperPath {
-    NSFileManager *fm = [NSFileManager defaultManager];
-    NSArray *roots = @[@"/var/containers/Bundle/Application",
-                       @"/var/mobile/Containers/Bundle/Application",
-                       @"/private/var/containers/Bundle/Application"];
-    for (NSString *root in roots) {
-        for (NSString *d in [fm contentsOfDirectoryAtPath:root error:nil]) {
-            NSString *hp = [[root stringByAppendingPathComponent:d]
-                            stringByAppendingPathComponent:@"TrollStore.app/trollstorehelper"];
-            if ([fm fileExistsAtPath:hp]) return hp;
-        }
+#pragma mark - 杀进程 / 重建缓存
+
+- (void)killWeChat {
+    NSString *helper = [self helperPath];
+    if (!helper.length) {
+        [self log:@"[!] 没有 wvfixd，无法结束微信进程"];
+        return;
     }
-    for (NSString *p in @[@"/var/jb/Applications/TrollStore.app/trollstorehelper",
-                          @"/Applications/TrollStore.app/trollstorehelper",
-                          @"/var/containers/Bundle/Application/.trollstore/TrollStore.app/trollstorehelper"]) {
-        if ([fm fileExistsAtPath:p]) return p;
-    }
-    return nil;
+    int err = 0;
+    int rc = spawnRootFull(helper, @[@"--kill", @"WeChat"],
+                           WVF_PERSONA_FLAGS_OVERRIDE, nil, &err);
+    [self log:@"[i] 结束微信进程：rc=%d spawnErr=%d", rc, err];
 }
 
-// 改完 Info.plist 后必须做两件事：
-//   1) 杀掉微信，让新进程重新读 plist（进程内 NSBundle 会缓存旧版本号）
-//   2) 重建图标缓存，让 LaunchServices 重新登记 app（否则桌面图标点不动）
 - (void)refreshIconCacheAndKill {
     [self killWeChat];
+
     NSString *h = [self trollStoreHelperPath];
     if (!h) {
         [self log:@"[!] 没找到 trollstorehelper"];
         [self log:@"[!] 请手动：TrollStore → 设置 → Rebuild Icon Cache"];
         return;
     }
-    [self log:@"[i] 正在重建图标缓存…"];
+
+    [self log:@"[i] 重建图标缓存（refresh-all）…"];
     int err = 0;
-    int rc = spawnRootFull(h, @[@"uicache"], WVF_PERSONA_FLAGS_OVERRIDE, nil, &err);
-    [self log:@"[i] 重建图标缓存：rc=%d spawnErr=%d", rc, err];
-    if (rc != 0) {
-        [self log:@"[!] 自动重建失败，请手动：TrollStore → 设置 → Rebuild Icon Cache"];
-    }
-}
+    int rc = spawnRootFull(h, @[@"refresh-all"], WVF_PERSONA_FLAGS_OVERRIDE, nil, &err);
+    [self log:@"[i] refresh-all：rc=%d spawnErr=%d", rc, err];
 
-#pragma mark - 杀进程
-
-- (void)killWeChat {
-    if (spawnRoot(@"/usr/bin/killall", @[@"-9", @"WeChat"]) == 0) {
-        [self log:@"已结束微信进程（root）"];
-        return;
+    NSString *helper = [self helperPath];
+    if (helper.length) {
+        [self log:@"[i] 即将重启桌面（黑屏约 10 秒，属正常）"];
+        int e2 = 0;
+        int r2 = spawnRootFull(helper, @[@"--kill", @"SpringBoard"],
+                               WVF_PERSONA_FLAGS_OVERRIDE, nil, &e2);
+        [self log:@"[i] 重启桌面：rc=%d spawnErr=%d", r2, e2];
     }
-    pid_t pid = 0;
-    char *argv[] = { (char *)"killall", (char *)"-9", (char *)"WeChat", NULL };
-    if (posix_spawn(&pid, "/usr/bin/killall", NULL, NULL, argv, environ) == 0) {
-        [self log:@"已结束微信进程"];
-        return;
-    }
-    [self log:@"结束进程失败，请手动上滑关掉微信"];
 }
 
 #pragma mark - UI
@@ -539,6 +529,16 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     va_start(ap, fmt);
     NSString *line = [[NSString alloc] initWithFormat:fmt arguments:ap];
     va_end(ap);
+
+    NSString *dir = [self workDir];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                             withIntermediateDirectories:YES attributes:nil error:NULL];
+    FILE *fp = fopen([[dir stringByAppendingPathComponent:@"last.log"] UTF8String], "a");
+    if (fp) {
+        fprintf(fp, "%s\n", line.UTF8String);
+        fclose(fp);
+    }
+
     dispatch_async(dispatch_get_main_queue(), ^{
         NSString *old = self.logView.text ?: @"";
         self.logView.text = [old stringByAppendingFormat:@"%@\n", line];
@@ -617,7 +617,7 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     y += 20;
     self.bundleVerField = [[UITextField alloc] initWithFrame:CGRectMake(16, y, w - 32, 38)];
     self.bundleVerField.borderStyle = UITextBorderStyleRoundedRect;
-    self.bundleVerField.placeholder = @"例如 8.0.9.99";
+    self.bundleVerField.placeholder = @"例如 8.0.99.99";
     self.bundleVerField.text = kDefaultBundleVer;
     self.bundleVerField.keyboardType = UIKeyboardTypeNumbersAndPunctuation;
     self.bundleVerField.textAlignment = NSTextAlignmentCenter;
@@ -686,6 +686,7 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
 
     resolvePersona();
     [self log:@"[i] persona 符号：%@", g_personaAvailable ? @"可用" : @"缺失"];
+    [self log:@"[i] trollstorehelper：%@", [self trollStoreHelperPath] ? @"已找到" : @"未找到"];
 
     [[NSFileManager defaultManager] createDirectoryAtPath:[self workDir]
                              withIntermediateDirectories:YES attributes:nil error:NULL];
@@ -701,16 +702,16 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
                       [NSCharacterSet whitespaceCharacterSet]];
     NSString *bVer = [self.bundleVerField.text stringByTrimmingCharactersInSet:
                       [NSCharacterSet whitespaceCharacterSet]];
+    if (sVer.length < 3 || bVer.length < 3) {
+        [self log:@"[x] 版本号不合法：%@ / %@", sVer, bVer];
+        return;
+    }
     if (self.currentBundleVer.length) {
         if (versionAtLeast(bVer, self.currentBundleVer)) {
             [self log:@"[i] 上报版本 %@ >= 当前 %@，方向正确", bVer, self.currentBundleVer];
         } else {
             [self log:@"[!] 上报版本 %@ 比当前 %@ 小，服务端可能仍判旧", bVer, self.currentBundleVer];
         }
-    }
-    if (sVer.length < 3 || bVer.length < 3) {
-        [self log:@"[x] 版本号不合法：%@ / %@", sVer, bVer];
-        return;
     }
     [self log:@"---- 开始改写 ----"];
     [self log:@"[i] 显示版本 -> %@ | 上报版本 -> %@", sVer, bVer];
@@ -732,7 +733,7 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
         [self log:@"[+] 写入成功，回读：显示 %@ / 上报 %@",
             self.currentShortVer ?: @"?", self.currentBundleVer ?: @"?"];
         [self refreshIconCacheAndKill];
-        [self log:@"[✓] 回桌面点开微信登录即可"];
+        [self log:@"[✓] 桌面重启后点开微信登录即可"];
     } else {
         [self log:@"[x] 写入失败：%@", err ?: @"未知"];
     }
