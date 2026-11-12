@@ -60,6 +60,44 @@ static const NSTimeInterval kOfflineGrace = 3 * 86400;
     else [d removeObjectForKey:kWVFAppID];
 }
 
+#pragma mark - 硬件 UDID（需要 TrollStore 的 platform 权限）
+
+typedef CFTypeRef (*MGCopyAnswerFn)(CFStringRef);
+
+- (NSString *)hardwareUDID {
+    static NSString *cached;
+    static BOOL tried = NO;
+    if (tried) return cached;
+    tried = YES;
+
+    void *h = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);
+    if (!h) return nil;
+
+    MGCopyAnswerFn fn = (MGCopyAnswerFn)dlsym(h, "MGCopyAnswer");
+    if (!fn) fn = (MGCopyAnswerFn)dlsym(h, "MGBCopyAnswer");
+    if (!fn) return nil;
+
+    const char *keys[] = { "UniqueDeviceID", "SerialNumber" };
+    for (int i = 0; i < 2; i++) {
+        CFStringRef key = CFStringCreateWithCString(NULL, keys[i], kCFStringEncodingUTF8);
+        if (!key) continue;
+        CFTypeRef v = fn(key);
+        CFRelease(key);
+        if (v && CFGetTypeID(v) == CFStringGetTypeID()) {
+            NSString *s = [(__bridge NSString *)v copy];
+            CFRelease(v);
+            if (s.length >= 8) {
+                cached = [s uppercaseString];
+                return cached;
+            }
+        } else if (v) {
+            CFRelease(v);
+        }
+    }
+    return nil;
+}
+
+
 - (NSString *)chainDeviceID {
     NSDictionary *q = @{
         (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
@@ -96,27 +134,36 @@ static const NSTimeInterval kOfflineGrace = 3 * 86400;
     static NSString *cached;
     if (cached) return cached;
 
-    // 1. Keychain（卸载重装仍在，恢复出厂/换机才会丢）
-    NSString *v = [self chainDeviceID];
-
-    // 2. 没有就生成一个并存进 Keychain
-    if (!v.length) {
-        NSString *seed = nil;
-        @try {
-            seed = [[[UIDevice currentDevice] identifierForVendor] UUIDString];
-        } @catch (NSException *e) {
-            seed = nil;
-        }
-        if (!seed.length) seed = [[NSUUID UUID] UUIDString];
-        v = [seed stringByReplacingOccurrencesOfString:@"-" withString:@""];
-        v = [v uppercaseString];
-        [self saveChainDeviceID:v];
+    // 1. 硬件 UDID（刷机不变，换机才变）
+    NSString *v = [self hardwareUDID];
+    if (v.length) {
+        self.deviceIDSource = @"UDID";
+        cached = v;
+        return cached;
     }
 
+    // 2. Keychain 里持久化的标识（卸载重装仍在）
+    v = [self chainDeviceID];
+    if (v.length) {
+        self.deviceIDSource = @"KEYCHAIN";
+        cached = v;
+        return cached;
+    }
+
+    // 3. 首次运行：用 IDFV 生成并存入 Keychain
+    NSString *seed = nil;
+    @try {
+        seed = [[[UIDevice currentDevice] identifierForVendor] UUIDString];
+    } @catch (NSException *e) {
+        seed = nil;
+    }
+    if (!seed.length) seed = [[NSUUID UUID] UUIDString];
+    v = [[seed stringByReplacingOccurrencesOfString:@"-" withString:@""] uppercaseString];
+    [self saveChainDeviceID:v];
+    self.deviceIDSource = @"GEN";
     cached = v;
     return cached;
 }
-
 #pragma mark - 本地状态
 
 - (NSString *)activeKey {

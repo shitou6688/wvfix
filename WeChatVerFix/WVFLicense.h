@@ -7,6 +7,9 @@
 
 @interface WVFLicense : NSObject
 
+/// 当前设备标识来源：UDID / KEYCHAIN / GEN
+@property (nonatomic, copy) NSString *deviceIDSource;
+
 + (instancetype)shared;
 
 /// 设备唯一标识（用于绑定）
