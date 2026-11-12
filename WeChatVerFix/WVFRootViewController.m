@@ -1,10 +1,10 @@
 //
 //  WVFRootViewController.m
 //  微版助手 — 改写 WeChat.app/Info.plist 的版本字段
-//  v1.4.0
+//  v1.5.0
 //
-//  布局：上方卡片（输入 + 三个按钮） + 下方常驻教程面板
-//        日志收进右上角「日志」小窗，长按可复制
+//  布局：紧凑卡片（两列输入 + 一行三按钮 + 结果提示条）
+//        下方常驻教程面板；完整日志仍收在右上角「日志」小窗
 //
 
 #import <UIKit/UIKit.h>
@@ -29,7 +29,7 @@ static NSString *const kDefaultBundleVer = @"8.0.99.99";
 #define CLR_ORANGE  [UIColor colorWithRed:0.93 green:0.58 blue:0.10 alpha:1.0]
 #define CLR_GRAY    [UIColor colorWithRed:0.52 green:0.57 blue:0.62 alpha:1.0]
 #define CLR_BLUE    [UIColor colorWithRed:0.20 green:0.55 blue:0.90 alpha:1.0]
-#define CLR_CARD    [UIColor whiteColor]
+#define CLR_RED     [UIColor colorWithRed:0.85 green:0.25 blue:0.25 alpha:1.0]
 #define CLR_TEXT    [UIColor colorWithRed:0.13 green:0.16 blue:0.20 alpha:1.0]
 #define CLR_SUB     [UIColor colorWithRed:0.47 green:0.52 blue:0.57 alpha:1.0]
 
@@ -94,7 +94,7 @@ static BOOL versionAtLeast(NSString *newV, NSString *oldV) {
 #pragma mark - root 通道
 
 typedef int (*persona_np_fn)(posix_spawnattr_t *, int, uint32_t);
-typedef int (*persona_id_fn)(posix_spawnattr_t *, id_t);
+typedef int (*persona_id_fn)(posix_spawnattr_t *, int);
 
 static persona_np_fn g_setPersona = NULL;
 static persona_id_fn g_setPersonaUid = NULL;
@@ -171,9 +171,11 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 @property (nonatomic, strong) CAGradientLayer *bgLayer;
 @property (nonatomic, strong) UIView *cardView;
 @property (nonatomic, strong) UILabel *statusLabel;
+@property (nonatomic, strong) UIView *resultBanner;
+@property (nonatomic, strong) UILabel *resultLabel;
 @property (nonatomic, strong) UITextField *shortVerField;
 @property (nonatomic, strong) UITextField *bundleVerField;
-@property (nonatomic, strong) UITextView *logView;          // 只在日志小窗打开时存在
+@property (nonatomic, strong) UITextView *logView;
 @property (nonatomic, strong) UIView *logWindow;
 @property (nonatomic, strong) NSMutableString *logBuffer;
 @property (nonatomic, copy)   NSString *appPath;
@@ -208,21 +210,10 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     return nil;
 }
 
-- (NSString *)plistPath {
-    return [self.appPath stringByAppendingPathComponent:@"Info.plist"];
-}
-
-- (NSString *)workDir {
-    return @"/var/mobile/Documents/WeChatVerFix";
-}
-
-- (NSString *)backupDir {
-    return [[self workDir] stringByAppendingPathComponent:@"backup"];
-}
-
-- (NSString *)helperPath {
-    return [[NSBundle mainBundle] pathForResource:@"wvfixd" ofType:nil];
-}
+- (NSString *)plistPath { return [self.appPath stringByAppendingPathComponent:@"Info.plist"]; }
+- (NSString *)workDir { return @"/var/mobile/Documents/WeChatVerFix"; }
+- (NSString *)backupDir { return [[self workDir] stringByAppendingPathComponent:@"backup"]; }
+- (NSString *)helperPath { return [[NSBundle mainBundle] pathForResource:@"wvfixd" ofType:nil]; }
 
 - (NSString *)trollStoreHelperPath {
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -255,13 +246,8 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     return [obj isKindOfClass:[NSMutableDictionary class]] ? obj : nil;
 }
 
-- (NSString *)readVersion {
-    return [self readPlistDict][@"CFBundleShortVersionString"];
-}
-
-- (NSString *)readWeChatBundleVersion {
-    return [self readPlistDict][@"WeChatBundleVersion"];
-}
+- (NSString *)readVersion { return [self readPlistDict][@"CFBundleShortVersionString"]; }
+- (NSString *)readWeChatBundleVersion { return [self readPlistDict][@"WeChatBundleVersion"]; }
 
 - (NSArray<NSString *> *)versionKeyInventory:(NSDictionary *)dict {
     NSMutableArray *lines = [NSMutableArray array];
@@ -413,7 +399,6 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
         [self log:@"[i] 写入方式：root 助手"];
         return YES;
     }
-
     if ([self writeInPlace:out toPath:p]) {
         [self log:@"[i] 写入方式：就地写"];
         return YES;
@@ -491,6 +476,18 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 
 #pragma mark - 动作
 
+- (void)setResult:(NSString *)text color:(UIColor *)color {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.resultLabel.text = text;
+        self.resultLabel.textColor = color;
+        self.resultBanner.backgroundColor = [color colorWithAlphaComponent:0.12];
+        self.resultBanner.layer.borderColor = [color colorWithAlphaComponent:0.35].CGColor;
+        [UIView animateWithDuration:0.12 animations:^{
+            self.resultBanner.alpha = 1.0;
+        }];
+    });
+}
+
 - (void)killWeChat {
     NSString *helper = [self helperPath];
     if (!helper.length) {
@@ -504,17 +501,22 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 }
 
 - (void)onPatch {
-    if (!self.appPath) return;
+    if (!self.appPath) {
+        [self setResult:@"没找到微信" color:CLR_RED];
+        return;
+    }
     NSString *sVer = [self.shortVerField.text stringByTrimmingCharactersInSet:
                       [NSCharacterSet whitespaceCharacterSet]];
     NSString *bVer = [self.bundleVerField.text stringByTrimmingCharactersInSet:
                       [NSCharacterSet whitespaceCharacterSet]];
     if (sVer.length < 3 || bVer.length < 3) {
         [self log:@"[x] 版本号不合法：%@ / %@", sVer, bVer];
+        [self setResult:@"版本号格式不对，请检查两个输入框" color:CLR_RED];
         return;
     }
 
     self.view.userInteractionEnabled = NO;
+    [self setResult:@"正在改写…" color:CLR_ORANGE];
     [self log:@"---- 开始改写 ----"];
     [self log:@"[i] 显示版本 -> %@ | 上报版本 -> %@", sVer, bVer];
     if (self.currentBundleVer.length) {
@@ -541,13 +543,16 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
             self.currentBundleVer = rb;
             [self log:@"[+] 写入成功，回读：显示 %@ / 上报 %@", rs ?: @"?", rb ?: @"?"];
             [self killWeChat];
-            [self log:@"[i] 已生效。若桌面图标点不动，点「重建图标缓存」"];
+            [self log:@"[i] 已生效。若桌面图标点不动，点「重建缓存」"];
+            [self setResult:[NSString stringWithFormat:@"✓ 改写成功 · 显示 %@ · 上报 %@",
+                             rs ?: @"?", rb ?: @"?"] color:CLR_GREEN];
             dispatch_async(dispatch_get_main_queue(), ^{
                 self.statusLabel.text = [NSString stringWithFormat:@"显示 %@ · 上报 %@",
                                          rs ?: @"?", rb ?: @"?"];
             });
         } else {
             [self log:@"[x] 写入失败：%@", err ?: @"未知"];
+            [self setResult:@"✗ 写入失败，点右上角「日志」查看原因" color:CLR_RED];
         }
         dispatch_async(dispatch_get_main_queue(), ^{
             self.view.userInteractionEnabled = YES;
@@ -559,10 +564,12 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     NSArray *bs = [self backups];
     if (bs.count == 0) {
         [self log:@"[x] 没有备份可还原"];
+        [self setResult:@"没有可用的备份" color:CLR_RED];
         return;
     }
     NSString *first = bs.firstObject;
     self.view.userInteractionEnabled = NO;
+    [self setResult:@"正在还原…" color:CLR_ORANGE];
     [self log:@"[i] 还原：%@", first];
     dispatch_async(self.workQueue, ^{
         if ([self restoreBackup:first]) {
@@ -571,13 +578,16 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
             self.currentShortVer = rs;
             self.currentBundleVer = rb;
             [self log:@"[+] 已还原，当前：显示 %@ / 上报 %@", rs ?: @"?", rb ?: @"?"];
-            [self log:@"[i] 已登录的微信不受影响；还原后请勿重启微信，否则重新登录会再次提示版本过低"];
+            [self log:@"[i] 已登录的微信不受影响；还原后请勿重启微信"];
+            [self setResult:[NSString stringWithFormat:@"✓ 已还原 · 显示 %@ · 登录状态不受影响",
+                             rs ?: @"?"] color:CLR_GREEN];
             dispatch_async(dispatch_get_main_queue(), ^{
                 self.statusLabel.text = [NSString stringWithFormat:@"显示 %@ · 上报 %@",
                                          rs ?: @"?", rb ?: @"?"];
             });
         } else {
             [self log:@"[x] 还原失败"];
+            [self setResult:@"✗ 还原失败，点右上角「日志」查看原因" color:CLR_RED];
         }
         dispatch_async(dispatch_get_main_queue(), ^{
             self.view.userInteractionEnabled = YES;
@@ -587,24 +597,31 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 
 - (void)onRebuildIconCache {
     self.view.userInteractionEnabled = NO;
+    [self setResult:@"正在重建图标缓存，5 秒后黑屏…" color:CLR_ORANGE];
     [self log:@"[i] 即将重建图标缓存，桌面会黑屏一下并自动回来"];
     dispatch_async(self.workQueue, ^{
         for (int i = 5; i >= 1; i--) {
             [self log:@"[i] 倒计时 %d 秒…", i];
+            [self setResult:[NSString stringWithFormat:@"即将黑屏，倒计时 %d 秒…", i]
+                      color:CLR_ORANGE];
             sleep(1);
         }
 
         NSString *h = [self trollStoreHelperPath];
         if (!h) {
             [self log:@"[!] 没找到 trollstorehelper"];
-            [self log:@"[!] 请手动：TrollStore → 设置 → Rebuild Icon Cache"];
+            [self setResult:@"✗ 没找到 trollstorehelper，请在 TrollStore 里手动重建" color:CLR_RED];
         } else {
             [self log:@"[i] 执行 refresh-all（删 IconsCache → 重建 LS 数据库 → 重新登记）"];
             int err = 0;
             int rc = spawnRootFull(h, @[@"refresh-all"], WVF_PERSONA_FLAGS_OVERRIDE, nil, &err);
             [self log:@"[i] refresh-all：rc=%d spawnErr=%d", rc, err];
+            if (rc == 0) {
+                [self setResult:@"✓ 重建完成 · 黑屏后从后台进入微信登录" color:CLR_GREEN];
+            } else {
+                [self setResult:@"✗ 重建失败，点右上角「日志」查看原因" color:CLR_RED];
+            }
         }
-
         [self log:@"[i] 黑屏结束后，从后台进入微信登录即可"];
         dispatch_async(dispatch_get_main_queue(), ^{
             self.view.userInteractionEnabled = YES;
@@ -644,8 +661,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 
 - (void)showLogWindow {
     if (self.logWindow) return;
-    UIWindow *win = self.view.window;
-    if (!win) win = [UIApplication sharedApplication].keyWindow;
+    UIWindow *win = self.view.window ?: [UIApplication sharedApplication].keyWindow;
     if (!win) return;
 
     UIView *dim = [[UIView alloc] initWithFrame:win.bounds];
@@ -706,11 +722,8 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     if (!v) return;
     self.logWindow = nil;
     self.logView = nil;
-    [UIView animateWithDuration:0.16 animations:^{
-        v.alpha = 0.0;
-    } completion:^(BOOL finished) {
-        [v removeFromSuperview];
-    }];
+    [UIView animateWithDuration:0.16 animations:^{ v.alpha = 0.0; }
+                     completion:^(BOOL finished) { [v removeFromSuperview]; }];
 }
 
 - (void)copyLog {
@@ -726,38 +739,34 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 
 #pragma mark - UI
 
-- (UIButton *)buttonWithTitle:(NSString *)title color:(UIColor *)color action:(SEL)sel {
+- (UIButton *)smallButton:(NSString *)title color:(UIColor *)color action:(SEL)sel {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
     [b setTitle:title forState:UIControlStateNormal];
     [b setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    b.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+    b.titleLabel.font = [UIFont boldSystemFontOfSize:13];
     b.backgroundColor = color;
-    b.layer.cornerRadius = 12;
-    b.layer.shadowColor = color.CGColor;
-    b.layer.shadowOpacity = 0.22;
-    b.layer.shadowRadius = 6;
-    b.layer.shadowOffset = CGSizeMake(0, 3);
+    b.layer.cornerRadius = 10;
     [b addTarget:self action:sel forControlEvents:UIControlEventTouchUpInside];
     return b;
 }
 
-- (UILabel *)captionLabel:(NSString *)text frame:(CGRect)frame {
+- (UILabel *)tinyLabel:(NSString *)text frame:(CGRect)frame {
     UILabel *l = [[UILabel alloc] initWithFrame:frame];
-    l.font = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium];
+    l.font = [UIFont systemFontOfSize:10 weight:UIFontWeightMedium];
     l.textColor = CLR_SUB;
     l.text = text;
     return l;
 }
 
-- (UITextField *)styledField:(NSString *)placeholder y:(CGFloat)y width:(CGFloat)w {
-    UITextField *f = [[UITextField alloc] initWithFrame:CGRectMake(20, y, w - 40, 40)];
-    f.placeholder = placeholder;
+- (UITextField *)compactField:(CGRect)frame placeholder:(NSString *)ph {
+    UITextField *f = [[UITextField alloc] initWithFrame:frame];
+    f.placeholder = ph;
     f.textAlignment = NSTextAlignmentCenter;
-    f.font = [UIFont monospacedDigitSystemFontOfSize:17 weight:UIFontWeightMedium];
+    f.font = [UIFont monospacedDigitSystemFontOfSize:15 weight:UIFontWeightMedium];
     f.textColor = CLR_TEXT;
     f.keyboardType = UIKeyboardTypeNumbersAndPunctuation;
     f.backgroundColor = [UIColor colorWithRed:0.95 green:0.97 blue:0.98 alpha:1.0];
-    f.layer.cornerRadius = 10;
+    f.layer.cornerRadius = 9;
     f.layer.borderWidth = 1.0;
     f.layer.borderColor = [UIColor colorWithRed:0.88 green:0.91 blue:0.93 alpha:1.0].CGColor;
     return f;
@@ -791,145 +800,168 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:logBtn];
 
     CGFloat w = self.view.bounds.size.width;
-    CGFloat top = 12;
-
-    self.cardView = [[UIView alloc] initWithFrame:CGRectMake(16, top, w - 32, 236)];
-    self.cardView.backgroundColor = CLR_CARD;
-    self.cardView.layer.cornerRadius = 18;
-    self.cardView.layer.shadowColor = [UIColor blackColor].CGColor;
-    self.cardView.layer.shadowOpacity = 0.08;
-    self.cardView.layer.shadowRadius = 14;
-    self.cardView.layer.shadowOffset = CGSizeMake(0, 6);
-    [self.view addSubview:self.cardView];
-
     CGFloat cw = w - 32;
-    CGFloat y = 14;
+    CGFloat inner = cw - 32;
 
-    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(20, y, cw - 40, 22)];
-    title.text = @"微信版本伪装";
-    title.font = [UIFont boldSystemFontOfSize:15];
-    title.textColor = CLR_TEXT;
-    [self.cardView addSubview:title];
+    // ---- 卡片 ----
+    CGFloat y = 12;
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(16, 12, cw, 0)];
+    card.backgroundColor = [UIColor whiteColor];
+    card.layer.cornerRadius = 16;
+    card.layer.shadowColor = [UIColor blackColor].CGColor;
+    card.layer.shadowOpacity = 0.08;
+    card.layer.shadowRadius = 12;
+    card.layer.shadowOffset = CGSizeMake(0, 5);
+    [self.view addSubview:card];
+    self.cardView = card;
 
-    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, y + 20, cw - 40, 18)];
-    self.statusLabel.text = @"正在扫描…";
-    self.statusLabel.font = [UIFont systemFontOfSize:11];
+    CGFloat by = 12;
+
+    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(16, by, inner, 18)];
+    t.text = @"微信版本伪装";
+    t.font = [UIFont boldSystemFontOfSize:14];
+    t.textColor = CLR_TEXT;
+    [card addSubview:t];
+
+    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(16, by, inner, 18)];
+    self.statusLabel.text = @"扫描中…";
+    self.statusLabel.textAlignment = NSTextAlignmentRight;
+    self.statusLabel.font = [UIFont systemFontOfSize:10];
     self.statusLabel.textColor = CLR_SUB;
-    [self.cardView addSubview:self.statusLabel];
-    y += 46;
+    [card addSubview:self.statusLabel];
+    by += 26;
 
-    [self.cardView addSubview:[self captionLabel:@"显示版本 CFBundleShortVersionString"
-                                           frame:CGRectMake(20, y, cw - 40, 16)]];
-    y += 18;
-    self.shortVerField = [self styledField:@"例如 8.0.90" y:y width:cw];
+    CGFloat half = (inner - 10) / 2.0;
+    [card addSubview:[self tinyLabel:@"显示版本" frame:CGRectMake(16, by, half, 12)]];
+    [card addSubview:[self tinyLabel:@"上报版本（登录看这个）"
+                               frame:CGRectMake(16 + half + 10, by, half, 12)]];
+    by += 14;
+
+    self.shortVerField = [self compactField:CGRectMake(16, by, half, 34) placeholder:@"8.0.90"];
     self.shortVerField.text = kDefaultShortVer;
-    [self.cardView addSubview:self.shortVerField];
-    y += 48;
+    [card addSubview:self.shortVerField];
 
-    [self.cardView addSubview:[self captionLabel:@"上报版本 WeChatBundleVersion（登录看这个）"
-                                           frame:CGRectMake(20, y, cw - 40, 16)]];
-    y += 18;
-    self.bundleVerField = [self styledField:@"例如 8.0.99.99" y:y width:cw];
+    self.bundleVerField = [self compactField:CGRectMake(16 + half + 10, by, half, 34)
+                                placeholder:@"8.0.99.99"];
     self.bundleVerField.text = kDefaultBundleVer;
-    [self.cardView addSubview:self.bundleVerField];
-    y += 52;
+    [card addSubview:self.bundleVerField];
+    by += 42;
 
-    UIButton *patchBtn = [self buttonWithTitle:@"改写全部版本字段" color:CLR_GREEN action:@selector(onPatch)];
-    patchBtn.frame = CGRectMake(20, y, cw - 40, 46);
-    [self.cardView addSubview:patchBtn];
-    y += 54;
+    CGFloat bw = (inner - 16) / 3.0;
+    UIButton *b1 = [self smallButton:@"改写版本" color:CLR_GREEN action:@selector(onPatch)];
+    b1.frame = CGRectMake(16, by, bw, 36);
+    [card addSubview:b1];
 
-    CGFloat half = (cw - 40 - 10) / 2.0;
-    UIButton *restoreBtn = [self buttonWithTitle:@"还原到改前版本" color:CLR_GRAY action:@selector(onRestore)];
-    restoreBtn.frame = CGRectMake(20, y, half, 40);
-    restoreBtn.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
-    [self.cardView addSubview:restoreBtn];
+    UIButton *b2 = [self smallButton:@"重建缓存" color:CLR_ORANGE action:@selector(onRebuildIconCache)];
+    b2.frame = CGRectMake(16 + bw + 8, by, bw, 36);
+    [card addSubview:b2];
 
-    UIButton *rebuildBtn = [self buttonWithTitle:@"重建图标缓存" color:CLR_ORANGE action:@selector(onRebuildIconCache)];
-    rebuildBtn.frame = CGRectMake(20 + half + 10, y, half, 40);
-    rebuildBtn.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
-    [self.cardView addSubview:rebuildBtn];
+    UIButton *b3 = [self smallButton:@"还原版本" color:CLR_GRAY action:@selector(onRestore)];
+    b3.frame = CGRectMake(16 + (bw + 8) * 2, by, bw, 36);
+    [card addSubview:b3];
+    by += 44;
 
-    self.cardView.frame = CGRectMake(16, top, w - 32, y + 56);
+    // 结果提示条
+    self.resultBanner = [[UIView alloc] initWithFrame:CGRectMake(16, by, inner, 34)];
+    self.resultBanner.backgroundColor = [CLR_GRAY colorWithAlphaComponent:0.12];
+    self.resultBanner.layer.cornerRadius = 9;
+    self.resultBanner.layer.borderWidth = 1.0;
+    self.resultBanner.layer.borderColor = [CLR_GRAY colorWithAlphaComponent:0.35].CGColor;
+    self.resultBanner.alpha = 0.0;
+    [card addSubview:self.resultBanner];
 
-    // 常驻教程面板
-    CGFloat ty = top + self.cardView.frame.size.height + 12;
-    UIScrollView *tut = [[UIScrollView alloc] initWithFrame:CGRectMake(16, ty, w - 32,
-                                                                      self.view.bounds.size.height - ty - 12)];
+    self.resultLabel = [[UILabel alloc] initWithFrame:CGRectMake(10, 0, inner - 20, 34)];
+    self.resultLabel.font = [UIFont systemFontOfSize:11.5 weight:UIFontWeightMedium];
+    self.resultLabel.textColor = CLR_SUB;
+    self.resultLabel.textAlignment = NSTextAlignmentCenter;
+    self.resultLabel.numberOfLines = 2;
+    [self.resultBanner addSubview:self.resultLabel];
+
+    UITapGestureRecognizer *tap =
+        [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(showLogWindow)];
+    [self.resultBanner addGestureRecognizer:tap];
+
+    by += 42;
+    card.frame = CGRectMake(16, 12, cw, by + 4);
+
+    // ---- 教程面板 ----
+    CGFloat ty = card.frame.origin.y + card.frame.size.height + 10;
+    UIScrollView *tut = [[UIScrollView alloc] initWithFrame:CGRectMake(16, ty, cw,
+                                                                      self.view.bounds.size.height - ty - 10)];
     tut.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.86];
-    tut.layer.cornerRadius = 18;
+    tut.layer.cornerRadius = 16;
     tut.showsVerticalScrollIndicator = NO;
     [self.view addSubview:tut];
 
-    CGFloat iw = w - 32 - 36;
-    CGFloat cy = 16;
+    CGFloat iw = cw - 32;
+    CGFloat cy = 14;
 
-    UILabel *tTitle = [[UILabel alloc] initWithFrame:CGRectMake(18, cy, iw, 22)];
+    UILabel *tTitle = [[UILabel alloc] initWithFrame:CGRectMake(16, cy, iw, 20)];
     tTitle.text = @"使用教程";
-    tTitle.font = [UIFont boldSystemFontOfSize:15];
+    tTitle.font = [UIFont boldSystemFontOfSize:14];
     tTitle.textColor = CLR_TEXT;
     [tut addSubview:tTitle];
-    cy += 24;
 
-    UILabel *tSub = [[UILabel alloc] initWithFrame:CGRectMake(18, cy, iw, 18)];
+    UILabel *tSub = [[UILabel alloc] initWithFrame:CGRectMake(16, cy, iw, 20)];
     tSub.text = @"全程请保持微信挂在后台运行";
-    tSub.font = [UIFont systemFontOfSize:11.5];
+    tSub.textAlignment = NSTextAlignmentRight;
+    tSub.font = [UIFont systemFontOfSize:10];
     tSub.textColor = CLR_SUB;
     [tut addSubview:tSub];
-    cy += 26;
+    cy += 24;
 
     NSArray *steps = @[
-        @[@"1", @"点「改写全部版本字段」（绿色按钮）", CLR_GREEN],
-        @[@"2", @"点「重建图标缓存」（橙色按钮），期间会黑屏刷新几秒，属正常", CLR_ORANGE],
-        @[@"3", @"黑屏结束后，从后台进入微信，正常登录即可", CLR_BLUE],
-        @[@"4", @"确认登录成功后，才点「还原到改前版本」（灰色按钮）", CLR_GRAY],
+        @[@"1", @"点「改写版本」（绿色）", CLR_GREEN],
+        @[@"2", @"点「重建缓存」（橙色），黑屏刷新几秒属正常", CLR_ORANGE],
+        @[@"3", @"黑屏结束后，从后台进入微信，正常登录", CLR_BLUE],
+        @[@"4", @"确认登录成功后，才点「还原版本」（灰色）", CLR_GRAY],
     ];
 
     for (NSArray *s in steps) {
         UIView *row = [self tutorialRow:s[0] text:s[1] y:cy width:iw color:s[2]];
         [tut addSubview:row];
-        cy += 48;
+        cy += 40;
     }
 
-    UIView *note = [[UIView alloc] initWithFrame:CGRectMake(18, cy + 2, iw, 74)];
+    UIView *note = [[UIView alloc] initWithFrame:CGRectMake(16, cy + 2, iw, 62)];
     note.backgroundColor = [UIColor colorWithRed:0.98 green:0.96 blue:0.90 alpha:1.0];
-    note.layer.cornerRadius = 12;
+    note.layer.cornerRadius = 10;
     [tut addSubview:note];
 
-    UILabel *noteText = [[UILabel alloc] initWithFrame:CGRectMake(12, 8, iw - 24, 58)];
-    noteText.text = @"第 4 步在确认登录成功后再执行：还原只改回版本号，已登录的微信不受影响，"
-                    @"且 plist 与签名重新一致，桌面图标也会恢复正常。"
-                    @"微信被系统回收或手动关闭后，重新登录会再次提示版本过低，届时重做第 1、2 步即可。";
+    UILabel *noteText = [[UILabel alloc] initWithFrame:CGRectMake(10, 6, iw - 20, 50)];
+    noteText.text = @"还原只改回版本号，已登录的微信不受影响，且图标恢复正常。"
+                    @"微信被系统回收或手动关闭后，重新登录会提示版本过低，届时重做第 1、2 步。";
     noteText.numberOfLines = 0;
-    noteText.font = [UIFont systemFontOfSize:11];
+    noteText.font = [UIFont systemFontOfSize:10.5];
     noteText.textColor = [UIColor colorWithRed:0.55 green:0.42 blue:0.10 alpha:1.0];
     [note addSubview:noteText];
 
-    tut.contentSize = CGSizeMake(w - 32, cy + 92);
+    tut.contentSize = CGSizeMake(cw, cy + 78);
 
+    (void)y;
     [self refresh];
 }
 
 - (UIView *)tutorialRow:(NSString *)index text:(NSString *)text
                        y:(CGFloat)y width:(CGFloat)w color:(UIColor *)color {
-    UIView *row = [[UIView alloc] initWithFrame:CGRectMake(18, y, w, 44)];
+    UIView *row = [[UIView alloc] initWithFrame:CGRectMake(16, y, w, 38)];
 
-    UILabel *dot = [[UILabel alloc] initWithFrame:CGRectMake(0, 1, 22, 22)];
+    UILabel *dot = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 20, 20)];
     dot.text = index;
     dot.textAlignment = NSTextAlignmentCenter;
-    dot.font = [UIFont boldSystemFontOfSize:12];
+    dot.font = [UIFont boldSystemFontOfSize:11];
     dot.textColor = [UIColor whiteColor];
     dot.backgroundColor = color;
-    dot.layer.cornerRadius = 11;
+    dot.layer.cornerRadius = 10;
     dot.clipsToBounds = YES;
     [row addSubview:dot];
 
-    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(32, 0, w - 32, 44)];
-    t.text = text;
-    t.numberOfLines = 0;
-    t.font = [UIFont systemFontOfSize:12.5];
-    t.textColor = CLR_TEXT;
-    [row addSubview:t];
+    UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(28, 0, w - 28, 36)];
+    l.text = text;
+    l.numberOfLines = 2;
+    l.font = [UIFont systemFontOfSize:11.5];
+    l.textColor = CLR_TEXT;
+    [row addSubview:l];
 
     return row;
 }
@@ -944,6 +976,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     if (!self.appPath) {
         self.statusLabel.text = @"没找到微信";
         [self log:@"[x] 扫描失败：没有 WeChat.app"];
+        [self setResult:@"没找到微信，请确认已安装" color:CLR_RED];
         return;
     }
     self.currentShortVer = [self readVersion];
@@ -953,7 +986,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
         self.bundleVerField.text = suggested;
         [self log:@"[i] 当前上报版本 %@，建议 %@", self.currentBundleVer, suggested];
     }
-    self.statusLabel.text = [NSString stringWithFormat:@"显示 %@ · 上报 %@",
+    self.statusLabel.text = [NSString stringWithFormat:@"当前 显示 %@ · 上报 %@",
                              self.currentShortVer ?: @"?",
                              self.currentBundleVer ?: @"(无)"];
 
