@@ -804,8 +804,8 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     CGFloat inner = cw - 32;
 
     // ---- 卡片 ----
-    CGFloat y = 12;
-    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(16, 12, cw, 0)];
+    CGFloat y = 20;
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(16, 20, cw, 0)];
     card.backgroundColor = [UIColor whiteColor];
     card.layer.cornerRadius = 16;
     card.layer.shadowColor = [UIColor blackColor].CGColor;
@@ -882,33 +882,18 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     [self.resultBanner addGestureRecognizer:tap];
 
     by += 42;
-    card.frame = CGRectMake(16, 12, cw, by + 4);
+    card.frame = CGRectMake(16, 20, cw, by + 4);
 
     // ---- 教程面板 ----
-    CGFloat ty = card.frame.origin.y + card.frame.size.height + 10;
-    UIScrollView *tut = [[UIScrollView alloc] initWithFrame:CGRectMake(16, ty, cw,
-                                                                      self.view.bounds.size.height - ty - 10)];
-    tut.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.86];
+    CGFloat ty = card.frame.origin.y + card.frame.size.height + 13;
+    CGFloat tutH = self.view.bounds.size.height - ty - 16;
+    UIScrollView *tut = [[UIScrollView alloc] initWithFrame:CGRectMake(16, ty, cw, tutH)];
+    tut.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.88];
     tut.layer.cornerRadius = 16;
     tut.showsVerticalScrollIndicator = NO;
     [self.view addSubview:tut];
 
     CGFloat iw = cw - 32;
-    CGFloat cy = 14;
-
-    UILabel *tTitle = [[UILabel alloc] initWithFrame:CGRectMake(16, cy, iw, 20)];
-    tTitle.text = @"使用教程";
-    tTitle.font = [UIFont boldSystemFontOfSize:14];
-    tTitle.textColor = CLR_TEXT;
-    [tut addSubview:tTitle];
-
-    UILabel *tSub = [[UILabel alloc] initWithFrame:CGRectMake(16, cy, iw, 20)];
-    tSub.text = @"全程请保持微信挂在后台运行";
-    tSub.textAlignment = NSTextAlignmentRight;
-    tSub.font = [UIFont systemFontOfSize:10];
-    tSub.textColor = CLR_SUB;
-    [tut addSubview:tSub];
-    cy += 24;
 
     NSArray *steps = @[
         @[@"1", @"点「改写版本」（绿色）", CLR_GREEN],
@@ -917,33 +902,54 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
         @[@"4", @"确认登录成功后，才点「还原版本」（灰色）", CLR_GRAY],
     ];
 
+    CGFloat headerH = 22;
+    CGFloat rowH = 38;
+    CGFloat noteH = 64;
+    CGFloat fixedH = 18 + headerH + 4 * rowH + noteH + 20;
+    CGFloat gap = (tutH - fixedH) / 5.0;
+    if (gap < 2) gap = 2;
+    if (gap > 30) gap = 30;
+
+    CGFloat cy = 18;
+
+    UILabel *tTitle = [[UILabel alloc] initWithFrame:CGRectMake(16, cy, iw * 0.55, headerH)];
+    tTitle.text = @"使用教程";
+    tTitle.font = [UIFont boldSystemFontOfSize:14];
+    tTitle.textColor = CLR_TEXT;
+    [tut addSubview:tTitle];
+
+    UILabel *tSub = [[UILabel alloc] initWithFrame:CGRectMake(16 + iw * 0.55, cy, iw * 0.45, headerH)];
+    tSub.text = @"全程保持微信在后台";
+    tSub.textAlignment = NSTextAlignmentRight;
+    tSub.font = [UIFont systemFontOfSize:10];
+    tSub.textColor = CLR_SUB;
+    [tut addSubview:tSub];
+    cy += headerH + gap;
+
     for (NSArray *s in steps) {
         UIView *row = [self tutorialRow:s[0] text:s[1] y:cy width:iw color:s[2]];
         [tut addSubview:row];
-        cy += 40;
+        cy += rowH + gap;
     }
 
-    UIView *note = [[UIView alloc] initWithFrame:CGRectMake(16, cy + 2, iw, 62)];
+    UIView *note = [[UIView alloc] initWithFrame:CGRectMake(16, cy, iw, noteH)];
     note.backgroundColor = [UIColor colorWithRed:0.98 green:0.96 blue:0.90 alpha:1.0];
     note.layer.cornerRadius = 10;
     [tut addSubview:note];
 
-    UILabel *noteText = [[UILabel alloc] initWithFrame:CGRectMake(10, 6, iw - 20, 50)];
+    UILabel *noteText = [[UILabel alloc] initWithFrame:CGRectMake(10, 8, iw - 20, noteH - 16)];
     noteText.text = @"还原只改回版本号，已登录的微信不受影响，且图标恢复正常。"
                     @"微信被系统回收或手动关闭后，重新登录会提示版本过低，届时重做第 1、2 步。";
     noteText.numberOfLines = 0;
     noteText.font = [UIFont systemFontOfSize:10.5];
     noteText.textColor = [UIColor colorWithRed:0.55 green:0.42 blue:0.10 alpha:1.0];
     [note addSubview:noteText];
+    cy += noteH + 20;
 
-    tut.contentSize = CGSizeMake(cw, cy + 78);
-
-    // 面板高度跟随内容，避免下方留一大片空白
-    CGFloat contentH = cy + 78;
-    if (contentH < tut.frame.size.height) {
-        CGRect f = tut.frame;
-        f.size.height = contentH;
-        tut.frame = f;
+    tut.contentSize = CGSizeMake(cw, cy);
+    if (cy < tutH) {
+        CGFloat pad = (tutH - cy) / 2.0;
+        tut.contentInset = UIEdgeInsetsMake(pad, 0, pad, 0);
     }
 
     (void)y;
