@@ -1,4 +1,4 @@
-name: build-ipa
+﻿name: build-ipa
 
 on:
   push:
@@ -6,25 +6,24 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
-      - name: 解压源码
+      - name: 瑙ｅ帇婧愮爜
         run: |
           set -e
           unzip -o WeChatVerFix-src.zip -d src
           ls -la src
 
-      - name: 安装工具
+      - name: 瀹夎宸ュ叿
         run: brew install xcodegen ldid
 
-      - name: 生成 Xcode 工程
+      - name: 鐢熸垚 Xcode 宸ョ▼
         working-directory: src/WeChatVerFix
         run: xcodegen generate
 
-      - name: 编译（不签名）
-        working-directory: src/WeChatVerFix
+      - name: 缂栬瘧锛堜笉绛惧悕锛?        working-directory: src/WeChatVerFix
         run: |
           set -e
           xcodebuild \
@@ -36,7 +35,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build
 
-      - name: 打包成 IPA 并注入 entitlements
+      - name: 鎵撳寘鎴?IPA 骞舵敞鍏?entitlements
         working-directory: src/WeChatVerFix
         run: |
           set -e
@@ -50,7 +49,7 @@ jobs:
           cd ipa_root && zip -qry ../WeChatVerFix.ipa Payload
           cd .. && ls -la WeChatVerFix.ipa
 
-      - name: 上传产物
+      - name: 涓婁紶浜х墿
         uses: actions/upload-artifact@v4
         with:
           name: WeChatVerFix-ipa
