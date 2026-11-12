@@ -1,0 +1,29 @@
+name: WeChatVerFix
+options:
+  bundleIdPrefix: com.local
+  deploymentTarget:
+    iOS: "14.0"
+  createIntermediateGroups: true
+targets:
+  WeChatVerFix:
+    type: application
+    platform: iOS
+    sources:
+      - path: WeChatVerFix
+        excludes:
+          - Info.plist
+          - entitlements.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.local.wechatverfix
+        INFOPLIST_FILE: WeChatVerFix/Info.plist
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGNING_ALLOWED: "NO"
+        EXPANDED_CODE_SIGN_IDENTITY: ""
+        TARGETED_DEVICE_FAMILY: "1,2"
+        IPHONEOS_DEPLOYMENT_TARGET: "14.0"
+        GENERATE_INFOPLIST_FILE: "NO"
+        ENABLE_BITCODE: "NO"
+        CLANG_ENABLE_MODULES: "YES"
+        OTHER_LDFLAGS: "-framework UIKit -framework Foundation"

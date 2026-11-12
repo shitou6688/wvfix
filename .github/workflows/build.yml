@@ -14,25 +14,17 @@ jobs:
         run: |
           sw_vers
           xcodebuild -version
-
-      - name: Unzip source
-        run: |
-          set -e
-          unzip -o WeChatVerFix-src.zip -d src
-          ls -la src src/WeChatVerFix
+          ls -la
 
       - name: Install tools
         run: |
           brew install xcodegen ldid
 
       - name: Generate project
-        working-directory: src/WeChatVerFix
         run: xcodegen generate
 
       - name: Build unsigned
-        working-directory: src/WeChatVerFix
         run: |
-          set -e
           xcodebuild \
             -project WeChatVerFix.xcodeproj \
             -scheme WeChatVerFix \
@@ -43,22 +35,22 @@ jobs:
             build
 
       - name: Package IPA
-        working-directory: src/WeChatVerFix
         run: |
-          set -e
           APP=$(find build -maxdepth 6 -name "WeChatVerFix.app" -type d | head -1)
           echo "APP=$APP"
+          test -n "$APP"
           rm -rf ipa_root && mkdir -p ipa_root/Payload
           cp -R "$APP" ipa_root/Payload/
           ldid -SWeChatVerFix/entitlements.plist ipa_root/Payload/WeChatVerFix.app/WeChatVerFix
-          echo "--- entitlements on binary ---"
-          ldid -e ipa_root/Payload/WeChatVerFix.app/WeChatVerFix || true
-          cd ipa_root && zip -qry ../WeChatVerFix.ipa Payload
-          cd .. && ls -la WeChatVerFix.ipa && unzip -l WeChatVerFix.ipa
+          echo "--- entitlements embedded in binary ---"
+          ldid -e ipa_root/Payload/WeChatVerFix.app/WeChatVerFix
+          ( cd ipa_root && zip -qry ../WeChatVerFix.ipa Payload )
+          ls -la WeChatVerFix.ipa
+          unzip -l WeChatVerFix.ipa | head -20
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: WeChatVerFix-ipa
-          path: src/WeChatVerFix/WeChatVerFix.ipa
+          path: WeChatVerFix.ipa
           if-no-files-found: error
