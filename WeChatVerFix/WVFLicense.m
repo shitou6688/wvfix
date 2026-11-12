@@ -10,6 +10,8 @@
 #import "WVFLicense.h"
 #import <UIKit/UIKit.h>
 #import <CommonCrypto/CommonHMAC.h>
+#import <CommonCrypto/CommonKeyDerivation.h>
+#import <string.h>
 
 static NSString *const kWVFKey       = @"wvf_license_key";
 static NSString *const kWVFExpire    = @"wvf_license_expire";
@@ -50,10 +52,10 @@ static const NSTimeInterval kOfflineGrace = 3 * 86400;  // 离线宽限期 3 天
         v = nil;
     }
     if (!v.length) {
-        v = [[NSUserDefaults standardUserDefaults] stringForKey:kVVFDevice];
+        v = [[NSUserDefaults standardUserDefaults] stringForKey:kWVFDevice];
         if (!v.length) {
             v = [[NSUUID UUID] UUIDString];
-            [[NSUserDefaults standardUserDefaults] setObject:v forKey:kVVFDevice];
+            [[NSUserDefaults standardUserDefaults] setObject:v forKey:kWVFDevice];
         }
     }
     cached = [v stringByReplacingOccurrencesOfString:@"-" withString:@""];
@@ -97,7 +99,7 @@ static const NSTimeInterval kOfflineGrace = 3 * 86400;  // 离线宽限期 3 天
     const char *k = [self.secret UTF8String];
     const char *m = [text UTF8String];
     unsigned char out[CC_SHA256_DIGEST_LENGTH];
-    CCHmac(kCCPRFHmacAlgSHA256, k, strlen(k), m, strlen(m), out);
+    CCHmac(kCCHmacAlgSHA256, k, strlen(k), m, strlen(m), out);
 
     NSMutableString *hex = [NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH * 2];
     for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) {
