@@ -18,6 +18,7 @@
 #import <errno.h>
 #import <string.h>
 #import <sys/wait.h>
+#import <sys/stat.h>
 
 extern char **environ;
 
@@ -51,7 +52,7 @@ static void resolvePersona(void) {
 #define WVF_PERSONA_FLAGS_OVERRIDE 1
 
 // 以 uid/gid=0 执行一个外部程序，返回 exit code；<0 表示根本没起来
-static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
+static int spawnRootFlags(NSString *path, NSArray<NSString *> *args, uint32_t flags) {
     resolvePersona();
     if (!g_personaAvailable) return -1;
     if (![[NSFileManager defaultManager] fileExistsAtPath:path]) return -2;
@@ -65,7 +66,7 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
 
     posix_spawnattr_t attr;
     posix_spawnattr_init(&attr);
-    g_setPersona(&attr, 99, WVF_PERSONA_FLAGS_OVERRIDE);
+    g_setPersona(&attr, 99, flags);
     g_setPersonaUid(&attr, 0);
     g_setPersonaGid(&attr, 0);
 
@@ -81,6 +82,10 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     int status = 0;
     waitpid(pid, &status, 0);
     return WIFEXITED(status) ? WEXITSTATUS(status) : -3;
+}
+
+static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
+    return spawnRootFlags(path, args, WVF_PERSONA_FLAGS_OVERRIDE);
 }
 
 @interface WVFRootViewController : UIViewController
@@ -431,10 +436,48 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
 
     resolvePersona();
     [self log:@"[i] persona 符号：%@", g_personaAvailable ? @"可用" : @"缺失"];
-    if (g_personaAvailable) {
-        int rc = spawnRoot(@"/bin/ls", @[@"/"]);
-        [self log:@"[i] root 探测 /bin/ls：rc=%d", rc];
+    [self runDiagnostics];
+}
+
+- (void)runDiagnostics {
+    NSMutableString *s = [NSMutableString string];
+    [s appendString:@"==== WeChatVerFix 诊断 ====\n"];
+    [s appendFormat:@"uid=%d euid=%d gid=%d\n", getuid(), geteuid(), getgid()];
+    [s appendFormat:@"persona symbols=%d\n", g_personaAvailable ? 1 : 0];
+    [s appendFormat:@"plist=%s\n", [[self plistPath] UTF8String]];
+
+    struct stat st;
+    if (stat([[self plistPath] UTF8String], &st) == 0) {
+        [s appendFormat:@"plist mode=%o uid=%d gid=%d\n", st.st_mode & 07777, st.st_uid, st.st_gid];
+    } else {
+        [s appendFormat:@"plist stat errno=%d %s\n", errno, strerror(errno)];
     }
+
+    int rc1 = spawnRootFlags(@"/bin/ls", @[@"/"], 1);
+    [s appendFormat:@"spawn(/bin/ls, flags=1)=%d\n", rc1];
+    int rc0 = spawnRootFlags(@"/bin/ls", @[@"/"], 0);
+    [s appendFormat:@"spawn(/bin/ls, flags=0)=%d\n", rc0];
+
+    errno = 0;
+    int ch = chmod([[self plistPath] UTF8String], 0666);
+    [s appendFormat:@"chmod(plist,0666)=%d errno=%d %s\n", ch, errno, ch == 0 ? "ok" : strerror(errno)];
+
+    errno = 0;
+    int fd = open([[self plistPath] UTF8String], O_WRONLY);
+    [s appendFormat:@"open(O_WRONLY)=%d errno=%d %s\n", fd, errno, fd >= 0 ? "ok" : strerror(errno));
+    if (fd >= 0) close(fd);
+
+    [s appendString:@"==== end ====\n"];
+
+    NSString *diagPath = [[self workDir] stringByAppendingPathComponent:@"diag.txt"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:[self workDir]
+                              withIntermediateDirectories:YES attributes:nil error:NULL];
+    [s writeToFile:diagPath atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+
+    for (NSString *line in [s componentsSeparatedByString:@"\n"]) {
+        if (line.length) [self log:@"%@", line];
+    }
+    [self log:@"[i] 诊断已存盘：%@", diagPath];
 }
 
 - (void)onPatch {
