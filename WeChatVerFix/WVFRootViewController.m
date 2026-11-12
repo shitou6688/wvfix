@@ -668,6 +668,15 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
         return;
     }
     UIWindow *win = self.view.window ?: [UIApplication sharedApplication].keyWindow;
+    if (!win) {
+        // 窗口还没挂上，稍后重试（最多持续尝试）
+        __weak typeof(self) weakSelf = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            [weakSelf showGate:message];
+        });
+        return;
+    }
     if (!win) return;
 
     UIView *dim = [[UIView alloc] initWithFrame:win.bounds];
@@ -1143,7 +1152,6 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 
 
     [self refresh];
-    [self checkLicenseOnLaunch];
 }
 
 - (UIView *)tutorialRow:(NSString *)index text:(NSString *)text
@@ -1169,6 +1177,15 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 
     return row;
 }
+
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    static BOOL licenseChecked = NO;
+    if (licenseChecked) return;
+    licenseChecked = YES;
+    [self checkLicenseOnLaunch];
+}
+
 
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
