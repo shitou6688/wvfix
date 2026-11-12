@@ -803,9 +803,31 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 
     CGFloat iw = cw - 32;
 
-    // ---- 顶部卡片逐层下移 ----
+    // 先算两块卡片的内容高度，取较大者作为统一高度（上下等高）
+    CGFloat topPad = 14, titleH = 20, capH = 14, fieldH = 40, btnH = 42, bannerH = 38;
+    CGFloat g1 = 8, g2 = 2, g3 = 10, g4 = 10, botPad = 10;
+
+    CGFloat tTop = 10, tHead = 18, tRowH = 28, tRowGap = 5, tNoteH = 44, tBot = 10;
+
+    CGFloat cardNatural = topPad + titleH + g1 + capH + g2 + fieldH + g3
+                        + btnH + g4 + bannerH + botPad;
+    CGFloat tutNatural  = tTop + tHead + 6 + (4 * tRowH + 3 * tRowGap) + 8 + tNoteH + tBot;
+    CGFloat boxH = cardNatural > tutNatural ? cardNatural : tutNatural;
+
+    CGFloat extraCard = boxH - cardNatural;
+    CGFloat extraTut  = boxH - tutNatural;
+
+    g1 += extraCard / 4.0;
+    g2 += extraCard / 4.0;
+    g3 += extraCard / 4.0;
+    g4 += extraCard / 4.0;
+
+    CGFloat tHeadGap = 6 + extraTut / 2.0;
+    CGFloat tRowGapF  = tRowGap + extraTut / 6.0;
+
+    // ---- 顶部卡片 ----
     CGFloat topMargin = 28;
-    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(16, topMargin, cw, 0)];
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(16, topMargin, cw, boxH)];
     card.backgroundColor = [UIColor whiteColor];
     card.layer.cornerRadius = 16;
     card.layer.shadowColor = [UIColor blackColor].CGColor;
@@ -815,53 +837,53 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     [self.view addSubview:card];
     self.cardView = card;
 
-    CGFloat by = 18;
+    CGFloat by = topPad;
 
-    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(16, by, inner, 20)];
+    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(16, by, inner, titleH)];
     t.text = @"微信版本伪装";
     t.font = [UIFont boldSystemFontOfSize:14];
     t.textColor = CLR_TEXT;
     [card addSubview:t];
 
-    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(16, by, inner, 20)];
+    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(16, by, inner, titleH)];
     self.statusLabel.text = @"扫描中…";
     self.statusLabel.textAlignment = NSTextAlignmentRight;
     self.statusLabel.font = [UIFont systemFontOfSize:10];
     self.statusLabel.textColor = CLR_SUB;
     [card addSubview:self.statusLabel];
-    by += 30;
+    by += titleH + g1;
 
     CGFloat half = (inner - 10) / 2.0;
-    [card addSubview:[self tinyLabel:@"显示版本" frame:CGRectMake(16, by, half, 14)]];
+    [card addSubview:[self tinyLabel:@"显示版本" frame:CGRectMake(16, by, half, capH)]];
     [card addSubview:[self tinyLabel:@"上报版本（登录看这个）"
-                               frame:CGRectMake(16 + half + 10, by, half, 14)]];
-    by += 16;
+                               frame:CGRectMake(16 + half + 10, by, half, capH)]];
+    by += capH + g2;
 
-    self.shortVerField = [self compactField:CGRectMake(16, by, half, 40) placeholder:@"8.0.90"];
+    self.shortVerField = [self compactField:CGRectMake(16, by, half, fieldH) placeholder:@"8.0.90"];
     self.shortVerField.text = kDefaultShortVer;
     [card addSubview:self.shortVerField];
 
-    self.bundleVerField = [self compactField:CGRectMake(16 + half + 10, by, half, 40)
+    self.bundleVerField = [self compactField:CGRectMake(16 + half + 10, by, half, fieldH)
                                 placeholder:@"8.0.99.99"];
     self.bundleVerField.text = kDefaultBundleVer;
     [card addSubview:self.bundleVerField];
-    by += 50;
+    by += fieldH + g3;
 
     CGFloat bw = (inner - 16) / 3.0;
     UIButton *b1 = [self smallButton:@"改写版本" color:CLR_GREEN action:@selector(onPatch)];
-    b1.frame = CGRectMake(16, by, bw, 42);
+    b1.frame = CGRectMake(16, by, bw, btnH);
     [card addSubview:b1];
 
     UIButton *b2 = [self smallButton:@"重建缓存" color:CLR_ORANGE action:@selector(onRebuildIconCache)];
-    b2.frame = CGRectMake(16 + bw + 8, by, bw, 42);
+    b2.frame = CGRectMake(16 + bw + 8, by, bw, btnH);
     [card addSubview:b2];
 
     UIButton *b3 = [self smallButton:@"还原版本" color:CLR_GRAY action:@selector(onRestore)];
-    b3.frame = CGRectMake(16 + (bw + 8) * 2, by, bw, 42);
+    b3.frame = CGRectMake(16 + (bw + 8) * 2, by, bw, btnH);
     [card addSubview:b3];
-    by += 52;
+    by += btnH + g4;
 
-    self.resultBanner = [[UIView alloc] initWithFrame:CGRectMake(16, by, inner, 38)];
+    self.resultBanner = [[UIView alloc] initWithFrame:CGRectMake(16, by, inner, bannerH)];
     self.resultBanner.backgroundColor = [CLR_GRAY colorWithAlphaComponent:0.12];
     self.resultBanner.layer.cornerRadius = 9;
     self.resultBanner.layer.borderWidth = 1.0;
@@ -869,28 +891,21 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     self.resultBanner.alpha = 1.0;
     [card addSubview:self.resultBanner];
 
-    self.resultLabel = [[UILabel alloc] initWithFrame:CGRectMake(10, 0, inner - 20, 34)];
+    self.resultLabel = [[UILabel alloc] initWithFrame:CGRectMake(10, 0, inner - 20, bannerH)];
     self.resultLabel.font = [UIFont systemFontOfSize:11.5 weight:UIFontWeightMedium];
     self.resultLabel.textColor = CLR_SUB;
     self.resultLabel.textAlignment = NSTextAlignmentCenter;
     self.resultLabel.numberOfLines = 2;
     [self.resultBanner addSubview:self.resultLabel];
     self.resultLabel.text = @"等待操作";
-    self.resultLabel.textColor = CLR_SUB;
 
     UITapGestureRecognizer *tap =
         [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(showLogWindow)];
     [self.resultBanner addGestureRecognizer:tap];
 
-    by += 48;
-    card.frame = CGRectMake(16, topMargin, cw, by);
-
-    // ---- 底部教程（紧凑，靠底） ----
-    CGFloat rowH = 34, rowGap = 8, headerH = 20, noteH = 58;
-    CGFloat tutContentH = 14 + headerH + 4 * (rowH + rowGap) + noteH + 12;
-    CGFloat tutY = self.view.bounds.size.height - 14 - tutContentH;
-
-    UIScrollView *tut = [[UIScrollView alloc] initWithFrame:CGRectMake(16, tutY, cw, tutContentH)];
+    // ---- 底部教程（与上框等高） ----
+    CGFloat tutY = self.view.bounds.size.height - 16 - boxH;
+    UIScrollView *tut = [[UIScrollView alloc] initWithFrame:CGRectMake(16, tutY, cw, boxH)];
     tut.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.88];
     tut.layer.cornerRadius = 16;
     tut.showsVerticalScrollIndicator = NO;
@@ -903,67 +918,66 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
         @[@"4", @"确认登录成功后，才点「还原版本」（灰色）", CLR_GRAY],
     ];
 
-    CGFloat cy = 14;
+    CGFloat cy = tTop;
 
-    UILabel *tTitle = [[UILabel alloc] initWithFrame:CGRectMake(16, cy, iw * 0.55, headerH)];
+    UILabel *tTitle = [[UILabel alloc] initWithFrame:CGRectMake(16, cy, iw * 0.55, tHead)];
     tTitle.text = @"使用教程";
-    tTitle.font = [UIFont boldSystemFontOfSize:14];
+    tTitle.font = [UIFont boldSystemFontOfSize:13.5];
     tTitle.textColor = CLR_TEXT;
     [tut addSubview:tTitle];
 
-    UILabel *tSub = [[UILabel alloc] initWithFrame:CGRectMake(16 + iw * 0.55, cy, iw * 0.45, headerH)];
+    UILabel *tSub = [[UILabel alloc] initWithFrame:CGRectMake(16 + iw * 0.55, cy, iw * 0.45, tHead)];
     tSub.text = @"全程保持微信在后台";
     tSub.textAlignment = NSTextAlignmentRight;
     tSub.font = [UIFont systemFontOfSize:10];
     tSub.textColor = CLR_SUB;
     [tut addSubview:tSub];
-    cy += headerH + 4;
+    cy += tHead + tHeadGap;
 
     for (NSArray *s in steps) {
-        UIView *row = [self tutorialRow:s[0] text:s[1] y:cy width:iw color:s[2]];
+        UIView *row = [self tutorialRow:s[0] text:s[1] y:cy width:iw height:tRowH color:s[2]];
         [tut addSubview:row];
-        cy += rowH + rowGap;
+        cy += tRowH + tRowGapF;
     }
 
-    UIView *note = [[UIView alloc] initWithFrame:CGRectMake(16, cy, iw, noteH)];
+    UIView *note = [[UIView alloc] initWithFrame:CGRectMake(16, cy, iw, tNoteH)];
     note.backgroundColor = [UIColor colorWithRed:0.98 green:0.96 blue:0.90 alpha:1.0];
     note.layer.cornerRadius = 10;
     [tut addSubview:note];
 
-    UILabel *noteText = [[UILabel alloc] initWithFrame:CGRectMake(10, 8, iw - 20, noteH - 16)];
+    UILabel *noteText = [[UILabel alloc] initWithFrame:CGRectMake(10, 6, iw - 20, tNoteH - 12)];
     noteText.text = @"还原只改回版本号，已登录的微信不受影响，且图标恢复正常。"
                     @"微信被系统回收或手动关闭后，重新登录会提示版本过低，届时重做第 1、2 步。";
     noteText.numberOfLines = 0;
-    noteText.font = [UIFont systemFontOfSize:10.5];
+    noteText.font = [UIFont systemFontOfSize:10];
     noteText.textColor = [UIColor colorWithRed:0.55 green:0.42 blue:0.10 alpha:1.0];
     [note addSubview:noteText];
-    cy += noteH + 12;
+    cy += tNoteH + tBot;
     tut.contentSize = CGSizeMake(cw, cy);
 
-    // ---- 中间日志面板（吃满剩余空间） ----
+    // ---- 中间日志（夹在两框之间，垂直居中） ----
     CGFloat logY = card.frame.origin.y + card.frame.size.height + 12;
     CGFloat logH = tutY - 12 - logY;
-    if (logH < 88) logH = 88;
 
     UIView *logPanel = [[UIView alloc] initWithFrame:CGRectMake(16, logY, cw, logH)];
     logPanel.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.88];
     logPanel.layer.cornerRadius = 16;
     [self.view addSubview:logPanel];
 
-    UILabel *logTitle = [[UILabel alloc] initWithFrame:CGRectMake(16, 12, inner * 0.5, 18)];
+    UILabel *logTitle = [[UILabel alloc] initWithFrame:CGRectMake(16, 10, inner * 0.5, 18)];
     logTitle.text = @"运行日志";
     logTitle.font = [UIFont boldSystemFontOfSize:13];
     logTitle.textColor = CLR_TEXT;
     [logPanel addSubview:logTitle];
 
-    UILabel *logHint = [[UILabel alloc] initWithFrame:CGRectMake(16 + inner * 0.5, 12, inner * 0.5, 18)];
+    UILabel *logHint = [[UILabel alloc] initWithFrame:CGRectMake(16 + inner * 0.5, 10, inner * 0.5, 18)];
     logHint.text = @"点此查看全部 ›";
     logHint.textAlignment = NSTextAlignmentRight;
     logHint.font = [UIFont systemFontOfSize:10];
     logHint.textColor = CLR_GREEN;
     [logPanel addSubview:logHint];
 
-    UITextView *tv = [[UITextView alloc] initWithFrame:CGRectMake(10, 34, cw - 20, logH - 44)];
+    UITextView *tv = [[UITextView alloc] initWithFrame:CGRectMake(10, 32, cw - 20, logH - 42)];
     tv.editable = NO;
     tv.font = [UIFont fontWithName:@"Menlo" size:9.5] ?: [UIFont systemFontOfSize:9.5];
     tv.textColor = [UIColor colorWithRed:0.28 green:0.32 blue:0.36 alpha:1.0];
@@ -983,22 +997,22 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 }
 
 - (UIView *)tutorialRow:(NSString *)index text:(NSString *)text
-                       y:(CGFloat)y width:(CGFloat)w color:(UIColor *)color {
-    UIView *row = [[UIView alloc] initWithFrame:CGRectMake(16, y, w, 34)];
+                       y:(CGFloat)y width:(CGFloat)w height:(CGFloat)h color:(UIColor *)color {
+    UIView *row = [[UIView alloc] initWithFrame:CGRectMake(16, y, w, h)];
 
-    UILabel *dot = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 20, 20)];
+    UILabel *dot = [[UILabel alloc] initWithFrame:CGRectMake(0, (h - 18) / 2.0, 18, 18)];
     dot.text = index;
     dot.textAlignment = NSTextAlignmentCenter;
-    dot.font = [UIFont boldSystemFontOfSize:11];
+    dot.font = [UIFont boldSystemFontOfSize:10];
     dot.textColor = [UIColor whiteColor];
     dot.backgroundColor = color;
-    dot.layer.cornerRadius = 10;
+    dot.layer.cornerRadius = 9;
     dot.clipsToBounds = YES;
     [row addSubview:dot];
 
-    UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(28, 0, w - 28, 32)];
+    UILabel *l = [[UILabel alloc] initWithFrame:CGRectMake(26, 0, w - 26, h)];
     l.text = text;
-    l.numberOfLines = 2;
+    l.numberOfLines = 1;
     l.font = [UIFont systemFontOfSize:11.5];
     l.textColor = CLR_TEXT;
     [row addSubview:l];
