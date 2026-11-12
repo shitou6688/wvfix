@@ -1,11 +1,12 @@
 //
 //  WVFRootViewController.m
 //  微信版本伪装 — 一键改写 WeChat.app/Info.plist 的版本号
-//  v1.0.5
+//  v1.0.6
 //
-//  依据实测：目标 Info.plist 属主 _installd、0644，直接写返回 EPERM(沙盒拒绝)。
-//  解法：补上 TrollStore 本体/RootHelper 用的文件系统豁免权限，
-//        并保留 persona root 通道（用真实存在的工具，不再猜 /bin/ls）。
+//  实测结论：
+//   - 目标 Info.plist 属主 _installd 0644，mobile 直接写是 EACCES(13)（纯 DAC 问题）
+//   - iOS 14 的 /bin 只有 df ps，/usr/bin 无 cp/cat/dd，靠系统工具没法写文件
+//   - 因此把自带的 root 助手 wvfixd 编译进 bundle，用 persona spawn(uid=0) 执行它
 //
 
 #import <UIKit/UIKit.h>
@@ -50,7 +51,6 @@ static void resolvePersona(void) {
 
 #define WVF_PERSONA_FLAGS_OVERRIDE 1
 
-// 以 uid/gid=0 spawn；stdoutPath 非空时把子进程 stdout 重定向到该文件（可用 cat 覆盖目标）
 static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
                          uint32_t flags, NSString *stdoutPath, int *spawnErr) {
     resolvePersona();
@@ -90,7 +90,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 
     if (rc != 0) {
         if (spawnErr) *spawnErr = rc;
-        return -1100;   // -1100 - rc 不再叠加，rc 单独返回
+        return -1100;
     }
 
     int status = 0;
@@ -151,8 +151,8 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     return [[self workDir] stringByAppendingPathComponent:@"backup"];
 }
 
-- (NSString *)toolList {
-    return [NSString stringWithFormat:@"%@/tools.txt", [self workDir]];
+- (NSString *)helperPath {
+    return [[NSBundle mainBundle] pathForResource:@"wvfixd" ofType:nil];
 }
 
 #pragma mark - 读写版本号
@@ -218,20 +218,16 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
             a[NSFilePosixPermissions]];
 }
 
-- (NSArray<NSString *> *)candidateTools {
-    return @[
-        @"/bin/cp", @"/usr/bin/cp",
-        @"/bin/cat", @"/usr/bin/cat",
-        @"/bin/dd", @"/usr/bin/dd",
-        @"/bin/ls", @"/usr/bin/ls",
-        @"/usr/bin/killall", @"/usr/bin/plutil",
-        @"/bin/launchctl", @"/usr/bin/id",
-    ];
-}
-
-- (BOOL)rootWriteViaTools:(NSData *)data {
+// 通过自带 root 助手覆盖目标文件
+- (BOOL)rootWriteViaHelper:(NSData *)data {
     NSFileManager *fm = [NSFileManager defaultManager];
     [fm createDirectoryAtPath:[self workDir] withIntermediateDirectories:YES attributes:nil error:NULL];
+
+    NSString *helper = [self helperPath];
+    if (!helper.length || ![fm fileExistsAtPath:helper]) {
+        [self log:@"[!] 找不到 root 助手 wvfixd（bundle 里没有）"];
+        return NO;
+    }
 
     NSString *tmp = [[self workDir] stringByAppendingPathComponent:@"patch.tmp.plist"];
     [fm removeItemAtPath:tmp error:NULL];
@@ -239,39 +235,38 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
         [self log:@"[!] 临时文件写入失败"];
         return NO;
     }
-    [self log:@"[i] 临时文件已写：%@", tmp];
 
-    NSString *target = [self plistPath];
+    int err = 0;
+    int rc = spawnRootFull(helper, @[tmp, [self plistPath]],
+                           WVF_PERSONA_FLAGS_OVERRIDE, nil, &err);
+    NSString *errText = [NSString stringWithFormat:@"rc=%d spawnErr=%d", rc, err];
+    [self log:@"[i] root 助手：%@", errText];
 
-    // A. cp 覆盖
-    for (NSString *cp in @[@"/bin/cp", @"/usr/bin/cp"]) {
-        if (![fm fileExistsAtPath:cp]) continue;
-        int err = 0;
-        int rc = spawnRootFull(cp, @[tmp, target], WVF_PERSONA_FLAGS_OVERRIDE, nil, &err);
-        [self log:@"[i] root cp(%@) rc=%d spawnErr=%d", cp, rc, err];
-        if (rc == 0) return YES;
+    if (rc == 0) return YES;
+
+    if (err != 0) {
+        NSString *e = [NSString stringWithFormat:@"posix_spawn errno=%d", err];
+        [self log:@"[!] %@", e];
     }
-
-    // B. cat 输出重定向到目标
-    for (NSString *cat in @[@"/bin/cat", @"/usr/bin/cat"]) {
-        if (![fm fileExistsAtPath:cat]) continue;
-        int err = 0;
-        int rc = spawnRootFull(cat, @[tmp], WVF_PERSONA_FLAGS_OVERRIDE, target, &err);
-        [self log:@"[i] root cat(%@)>target rc=%d spawnErr=%d", cat, rc, err];
-        if (rc == 0) return YES;
-    }
-
-    // C. dd
-    for (NSString *dd in @[@"/bin/dd", @"/usr/bin/dd"]) {
-        if (![fm fileExistsAtPath:dd]) continue;
-        int err = 0;
-        NSString *spec = [NSString stringWithFormat:@"if=%@ of=%@", tmp, target];
-        int rc = spawnRootFull(dd, @[spec], WVF_PERSONA_FLAGS_OVERRIDE, nil, &err);
-        [self log:@"[i] root dd(%@) rc=%d spawnErr=%d", dd, rc, err];
-        if (rc == 0) return YES;
-    }
-
     return NO;
+}
+
+- (void)probeRoot {
+    NSString *helper = [self helperPath];
+    if (!helper.length) return;
+    NSString *out = [[self workDir] stringByAppendingPathComponent:@"uid.txt"];
+    [[NSFileManager defaultManager] removeItemAtPath:out error:NULL];
+
+    int err = 0;
+    int rc = spawnRootFull(helper, @[@"--uid", out], WVF_PERSONA_FLAGS_OVERRIDE, nil, &err);
+    NSString *text = [NSString stringWithContentsOfFile:out
+                                               encoding:NSUTF8StringEncoding error:NULL];
+    if (rc == 0 && text.length) {
+        [self log:@"[i] root 自检：%@", [text stringByTrimmingCharactersInSet:
+                                        [NSCharacterSet whitespaceAndNewlineCharacterSet]]];
+    } else {
+        [self log:@"[i] root 自检失败：rc=%d spawnErr=%d", rc, err];
+    }
 }
 
 - (BOOL)writeVersion:(NSString *)newVer error:(NSString **)errOut {
@@ -283,7 +278,13 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     }
     NSString *p = [self plistPath];
 
-    // 1) 就地写（补了文件系统豁免后，这一步可能直接成）
+    // 1) root 助手（唯一可靠路径）
+    if ([self rootWriteViaHelper:out]) {
+        [self log:@"[i] 写入方式：root 助手"];
+        return YES;
+    }
+
+    // 2) 就地写（万一权限变了）
     if ([self writeInPlace:out toPath:p]) {
         [self log:@"[i] 写入方式：就地写"];
         return YES;
@@ -291,12 +292,6 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     int e1 = errno;
     NSString *e1Text = [NSString stringWithUTF8String:strerror(e1)];
     [self log:@"[!] 就地写失败 errno=%d %@", e1, e1Text];
-
-    // 2) root 通道
-    if ([self rootWriteViaTools:out]) {
-        [self log:@"[i] 写入方式：root 工具"];
-        return YES;
-    }
 
     // 3) 原子写
     NSError *e2 = nil;
@@ -362,8 +357,8 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     NSString *src = [[self backupDir] stringByAppendingPathComponent:name];
     NSData *d = [NSData dataWithContentsOfFile:src];
     if (!d) return NO;
-    if ([self writeInPlace:d toPath:[self plistPath]]) return YES;
-    return [self rootWriteViaTools:d];
+    if ([self rootWriteViaHelper:d]) return YES;
+    return [self writeInPlace:d toPath:[self plistPath]];
 }
 
 #pragma mark - 杀进程
@@ -409,6 +404,19 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     return b;
 }
 
+- (void)copyLog {
+    UIPasteboard *pb = [UIPasteboard generalPasteboard];
+    pb.string = self.logView.text ?: @"";
+    UIAlertController *ac = [UIAlertController
+        alertControllerWithTitle:@"已复制"
+                         message:@"全部日志已复制到剪贴板，可以直接粘贴发送"
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [ac addAction:[UIAlertAction actionWithTitle:@"好"
+                                           style:UIAlertActionStyleDefault
+                                         handler:nil]];
+    [self presentViewController:ac animated:YES completion:nil];
+}
+
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor whiteColor];
@@ -423,12 +431,12 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     [self.view addSubview:self.statusLabel];
     y += 30;
 
-    self.pathLabel = [[UILabel alloc] initWithFrame:CGRectMake(16, y, w - 32, 40)];
-    self.pathLabel.font = [UIFont systemFontOfSize:10];
+    self.pathLabel = [[UILabel alloc] initWithFrame:CGRectMake(16, y, w - 32, 34)];
+    self.pathLabel.font = [UIFont systemFontOfSize:9];
     self.pathLabel.textColor = [UIColor grayColor];
     self.pathLabel.numberOfLines = 2;
     [self.view addSubview:self.pathLabel];
-    y += 46;
+    y += 40;
 
     self.verField = [[UITextField alloc] initWithFrame:CGRectMake(16, y, w - 32, 40)];
     self.verField.borderStyle = UITextBorderStyleRoundedRect;
@@ -437,19 +445,25 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     self.verField.keyboardType = UIKeyboardTypeNumbersAndPunctuation;
     self.verField.textAlignment = NSTextAlignmentCenter;
     [self.view addSubview:self.verField];
-    y += 50;
+    y += 48;
 
     UIButton *doBtn = [self makeButton:@"一键改成这个版本" action:@selector(onPatch)];
     doBtn.frame = CGRectMake(16, y, w - 32, 46);
     doBtn.backgroundColor = [UIColor colorWithRed:0.13 green:0.65 blue:0.35 alpha:1.0];
     [doBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     [self.view addSubview:doBtn];
-    y += 54;
-
-    UIButton *restoreBtn = [self makeButton:@"还原到改前的版本" action:@selector(onRestore)];
-    restoreBtn.frame = CGRectMake(16, y, w - 32, 42);
-    [self.view addSubview:restoreBtn];
     y += 52;
+
+    CGFloat half = (w - 32 - 10) / 2.0;
+    UIButton *restoreBtn = [self makeButton:@"还原到改前版本" action:@selector(onRestore)];
+    restoreBtn.frame = CGRectMake(16, y, half, 40);
+    [self.view addSubview:restoreBtn];
+
+    UIButton *copyBtn = [self makeButton:@"复制全部日志" action:@selector(copyLog)];
+    copyBtn.frame = CGRectMake(16 + half + 10, y, half, 40);
+    copyBtn.backgroundColor = [UIColor colorWithWhite:0.88 alpha:1.0];
+    [self.view addSubview:copyBtn];
+    y += 48;
 
     self.logView = [[UITextView alloc] initWithFrame:CGRectMake(12, y, w - 24,
                                                                self.view.bounds.size.height - y - 16)];
@@ -460,16 +474,6 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     [self.view addSubview:self.logView];
 
     [self refresh];
-}
-
-- (NSString *)listDir:(NSString *)dir limit:(NSUInteger)limit {
-    NSArray *items = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:dir error:NULL];
-    if (!items) return @"(列不出)";
-    NSArray *sorted = [items sortedArrayUsingSelector:@selector(compare:)];
-    if (sorted.count > limit) {
-        sorted = [sorted subarrayWithRange:NSMakeRange(0, limit)];
-    }
-    return [sorted componentsJoinedByString:@" "];
 }
 
 - (void)refresh {
@@ -491,25 +495,11 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
 
     resolvePersona();
     [self log:@"[i] persona 符号：%@", g_personaAvailable ? @"可用" : @"缺失"];
+    [self log:@"[i] 助手路径：%@", [self helperPath] ?: @"(缺失)"];
 
-    // 枚举系统工具，落盘 tools.txt
-    NSMutableString *tools = [NSMutableString string];
-    NSFileManager *fm = [NSFileManager defaultManager];
-    [fm createDirectoryAtPath:[self workDir] withIntermediateDirectories:YES attributes:nil error:NULL];
-
-    for (NSString *dir in @[@"/bin", @"/usr/bin", @"/sbin", @"/usr/sbin"]) {
-        NSString *listing = [self listDir:dir limit:80];
-        [tools appendFormat:@"%@: %@\n", dir, listing];
-        [self log:@"[i] %@ -> %@", dir, listing];
-    }
-    [tools appendString:@"\n候选工具存在性:\n"];
-    for (NSString *t in [self candidateTools]) {
-        BOOL ex = [fm fileExistsAtPath:t];
-        [tools appendFormat:@"%@ = %d\n", t, ex ? 1 : 0];
-        if (ex) [self log:@"[i] 存在：%@", t];
-    }
-    [tools writeToFile:[self toolList] atomically:YES encoding:NSUTF8StringEncoding error:NULL];
-    [self log:@"[i] 工具清单：%@", [self toolList]];
+    [[NSFileManager defaultManager] createDirectoryAtPath:[self workDir]
+                             withIntermediateDirectories:YES attributes:nil error:NULL];
+    if ([self helperPath]) [self probeRoot];
 }
 
 - (void)onPatch {
