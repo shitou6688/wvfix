@@ -1,0 +1,58 @@
+name: build-ipa
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 解压源码
+        run: |
+          set -e
+          unzip -o WeChatVerFix-src.zip -d src
+          ls -la src
+
+      - name: 安装工具
+        run: brew install xcodegen ldid
+
+      - name: 生成 Xcode 工程
+        working-directory: src/WeChatVerFix
+        run: xcodegen generate
+
+      - name: 编译（不签名）
+        working-directory: src/WeChatVerFix
+        run: |
+          set -e
+          xcodebuild \
+            -project WeChatVerFix.xcodeproj \
+            -scheme WeChatVerFix \
+            -sdk iphoneos \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: 打包成 IPA 并注入 entitlements
+        working-directory: src/WeChatVerFix
+        run: |
+          set -e
+          APP=$(find build -maxdepth 6 -name "WeChatVerFix.app" -type d | head -1)
+          echo "APP=$APP"
+          rm -rf ipa_root && mkdir -p ipa_root/Payload
+          cp -R "$APP" ipa_root/Payload/
+          cp WeChatVerFix/entitlements.plist ipa_root/Payload/
+          ldid -Sipa_root/Payload/entitlements.plist ipa_root/Payload/WeChatVerFix.app/WeChatVerFix
+          ldid -e ipa_root/Payload/WeChatVerFix.app/WeChatVerFix || true
+          cd ipa_root && zip -qry ../WeChatVerFix.ipa Payload
+          cd .. && ls -la WeChatVerFix.ipa
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: WeChatVerFix-ipa
+          path: src/WeChatVerFix/WeChatVerFix.ipa
+          if-no-files-found: error
