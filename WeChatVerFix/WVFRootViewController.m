@@ -1,10 +1,10 @@
 //
 //  WVFRootViewController.m
 //  微版助手 — 改写 WeChat.app/Info.plist 的版本字段
-//  v1.2.0
+//  v1.4.0
 //
-//  三个按钮：改写全部版本字段 / 还原到改前版本 / 重建图标缓存
-//  重建图标缓存前有 5 秒倒计时，方便看清日志
+//  布局：上方卡片（输入 + 三个按钮） + 下方常驻教程面板
+//        日志收进右上角「日志」小窗，长按可复制
 //
 
 #import <UIKit/UIKit.h>
@@ -25,10 +25,10 @@ extern char **environ;
 static NSString *const kDefaultShortVer  = @"8.0.90";
 static NSString *const kDefaultBundleVer = @"8.0.99.99";
 
-// 配色
 #define CLR_GREEN   [UIColor colorWithRed:0.07 green:0.72 blue:0.42 alpha:1.0]
 #define CLR_ORANGE  [UIColor colorWithRed:0.93 green:0.58 blue:0.10 alpha:1.0]
 #define CLR_GRAY    [UIColor colorWithRed:0.52 green:0.57 blue:0.62 alpha:1.0]
+#define CLR_BLUE    [UIColor colorWithRed:0.20 green:0.55 blue:0.90 alpha:1.0]
 #define CLR_CARD    [UIColor whiteColor]
 #define CLR_TEXT    [UIColor colorWithRed:0.13 green:0.16 blue:0.20 alpha:1.0]
 #define CLR_SUB     [UIColor colorWithRed:0.47 green:0.52 blue:0.57 alpha:1.0]
@@ -173,11 +173,12 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UITextField *shortVerField;
 @property (nonatomic, strong) UITextField *bundleVerField;
-@property (nonatomic, strong) UITextView *logView;
+@property (nonatomic, strong) UITextView *logView;          // 只在日志小窗打开时存在
+@property (nonatomic, strong) UIView *logWindow;
+@property (nonatomic, strong) NSMutableString *logBuffer;
 @property (nonatomic, copy)   NSString *appPath;
 @property (nonatomic, copy)   NSString *currentShortVer;
 @property (nonatomic, copy)   NSString *currentBundleVer;
-@property (nonatomic, strong) UIView *tutorialOverlay;
 @end
 
 @implementation WVFRootViewController
@@ -503,10 +504,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 }
 
 - (void)onPatch {
-    if (!self.appPath) {
-        [self log:@"[x] 还没找到微信"];
-        return;
-    }
+    if (!self.appPath) return;
     NSString *sVer = [self.shortVerField.text stringByTrimmingCharactersInSet:
                       [NSCharacterSet whitespaceCharacterSet]];
     NSString *bVer = [self.bundleVerField.text stringByTrimmingCharactersInSet:
@@ -614,179 +612,16 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     });
 }
 
-- (void)copyLog {
-    UIPasteboard *pb = [UIPasteboard generalPasteboard];
-    pb.string = self.logView.text ?: @"";
-    UIAlertController *ac = [UIAlertController
-        alertControllerWithTitle:@"已复制日志"
-                         message:nil
-                  preferredStyle:UIAlertControllerStyleAlert];
-    [ac addAction:[UIAlertAction actionWithTitle:@"好"
-                                           style:UIAlertActionStyleDefault
-                                         handler:nil]];
-    [self presentViewController:ac animated:YES completion:nil];
-}
-
-#pragma mark - 教程
-
-- (void)setupHelpButton {
-    UIButton *help = [UIButton buttonWithType:UIButtonTypeSystem];
-    [help setTitle:@"?" forState:UIControlStateNormal];
-    help.titleLabel.font = [UIFont boldSystemFontOfSize:19];
-    [help setTitleColor:CLR_GREEN forState:UIControlStateNormal];
-    help.frame = CGRectMake(0, 0, 34, 34);
-    [help addTarget:self action:@selector(showTutorial) forControlEvents:UIControlEventTouchUpInside];
-    self.navigationItem.rightBarButtonItem =
-        [[UIBarButtonItem alloc] initWithCustomView:help];
-}
-
-- (void)maybeShowTutorial {
-    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
-    if ([ud boolForKey:@"wvfTutorialShown"]) return;
-    [ud setBool:YES forKey:@"wvfTutorialShown"];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        [self showTutorial];
-    });
-}
-
-// 一条步骤：左侧圆形序号 + 右侧说明
-- (UIView *)tutorialRow:(NSString *)index text:(NSString *)text
-                       y:(CGFloat)y width:(CGFloat)w color:(UIColor *)color {
-    UIView *row = [[UIView alloc] initWithFrame:CGRectMake(0, y, w, 46)];
-
-    UILabel *dot = [[UILabel alloc] initWithFrame:CGRectMake(0, 1, 22, 22)];
-    dot.text = index;
-    dot.textAlignment = NSTextAlignmentCenter;
-    dot.font = [UIFont boldSystemFontOfSize:12];
-    dot.textColor = [UIColor whiteColor];
-    dot.backgroundColor = color;
-    dot.layer.cornerRadius = 11;
-    dot.clipsToBounds = YES;
-    [row addSubview:dot];
-
-    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(32, 0, w - 32, 44)];
-    t.text = text;
-    t.numberOfLines = 0;
-    t.font = [UIFont systemFontOfSize:13];
-    t.textColor = CLR_TEXT;
-    t.lineBreakMode = NSLineBreakByWordWrapping;
-    [row addSubview:t];
-
-    return row;
-}
-
-- (void)showTutorial {
-    if (self.tutorialOverlay) return;
-    UIWindow *win = self.view.window;
-    if (!win) win = [UIApplication sharedApplication].keyWindow;
-    if (!win) return;
-
-    UIView *dim = [[UIView alloc] initWithFrame:win.bounds];
-    dim.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.45];
-    dim.alpha = 0.0;
-    self.tutorialOverlay = dim;
-
-    CGFloat cw = win.bounds.size.width - 56;
-    if (cw > 340) cw = 340;
-
-    NSArray *steps = @[
-        @[@"1", @"点「改写全部版本字段」（绿色按钮）", [UIColor colorWithRed:0.07 green:0.72 blue:0.42 alpha:1.0]],
-        @[@"2", @"点「重建图标缓存」（橙色按钮），期间会黑屏刷新几秒，属正常", [UIColor colorWithRed:0.93 green:0.58 blue:0.10 alpha:1.0]],
-        @[@"3", @"黑屏结束后，从后台进入微信，正常登录即可", [UIColor colorWithRed:0.20 green:0.55 blue:0.90 alpha:1.0]],
-        @[@"4", @"不再需要伪装时，才点「还原到改前版本」（灰色按钮）", [UIColor colorWithRed:0.52 green:0.57 blue:0.62 alpha:1.0]],
-    ];
-
-    CGFloat pad = 20;
-    CGFloat inner = cw - pad * 2;
-    CGFloat h = pad + 26 + 20 + 6 + 4 * 50 + 10 + 62 + 12 + 44 + pad;
-
-    UIView *card = [[UIView alloc] initWithFrame:
-                    CGRectMake((win.bounds.size.width - cw) / 2,
-                               (win.bounds.size.height - h) / 2, cw, h)];
-    card.backgroundColor = [UIColor whiteColor];
-    card.layer.cornerRadius = 20;
-    card.layer.shadowColor = [UIColor blackColor].CGColor;
-    card.layer.shadowOpacity = 0.22;
-    card.layer.shadowRadius = 24;
-    card.layer.shadowOffset = CGSizeMake(0, 10);
-    [dim addSubview:card];
-
-    CGFloat y = pad;
-
-    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, inner, 26)];
-    title.text = @"使用教程";
-    title.font = [UIFont boldSystemFontOfSize:19];
-    title.textColor = CLR_TEXT;
-    [card addSubview:title];
-    y += 26;
-
-    UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, inner, 20)];
-    sub.text = @"全程请保持微信挂在后台运行";
-    sub.font = [UIFont systemFontOfSize:12];
-    sub.textColor = CLR_SUB;
-    [card addSubview:sub];
-    y += 26;
-
-    for (NSArray *s in steps) {
-        UIView *row = [self tutorialRow:s[0] text:s[1] y:y width:inner color:s[2]];
-        row.frame = CGRectMake(pad, y, inner, 46);
-        [card addSubview:row];
-        y += 50;
-    }
-
-    y += 8;
-    UIView *note = [[UIView alloc] initWithFrame:CGRectMake(pad, y, inner, 58)];
-    note.backgroundColor = [UIColor colorWithRed:0.98 green:0.96 blue:0.90 alpha:1.0];
-    note.layer.cornerRadius = 12;
-    [card addSubview:note];
-
-    UILabel *noteText = [[UILabel alloc] initWithFrame:CGRectMake(12, 8, inner - 24, 44)];
-    noteText.text = @"第 4 步在确认登录成功后再执行：还原只改回版本号，已登录的微信不受影响，且 plist 与签名重新一致，桌面图标也会恢复正常。注意：微信被系统回收或手动关闭后，重新登录会再次提示版本过低，届时重新执行第 1、2 步即可。";
-    noteText.numberOfLines = 0;
-    noteText.font = [UIFont systemFontOfSize:11.5];
-    noteText.textColor = [UIColor colorWithRed:0.55 green:0.42 blue:0.10 alpha:1.0];
-    [note addSubview:noteText];
-    y += 70;
-
-    UIButton *ok = [UIButton buttonWithType:UIButtonTypeSystem];
-    ok.frame = CGRectMake(pad, y, inner, 44);
-    [ok setTitle:@"我知道了" forState:UIControlStateNormal];
-    [ok setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    ok.titleLabel.font = [UIFont boldSystemFontOfSize:16];
-    ok.backgroundColor = CLR_GREEN;
-    ok.layer.cornerRadius = 12;
-    [ok addTarget:self action:@selector(hideTutorial) forControlEvents:UIControlEventTouchUpInside];
-    [card addSubview:ok];
-
-    UITapGestureRecognizer *tap =
-        [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(hideTutorial)];
-    [dim addGestureRecognizer:tap];
-
-    [win addSubview:dim];
-    [UIView animateWithDuration:0.22 animations:^{
-        dim.alpha = 1.0;
-    }];
-}
-
-- (void)hideTutorial {
-    UIView *v = self.tutorialOverlay;
-    if (!v) return;
-    self.tutorialOverlay = nil;
-    [UIView animateWithDuration:0.18 animations:^{
-        v.alpha = 0.0;
-    } completion:^(BOOL finished) {
-        [v removeFromSuperview];
-    }];
-}
-
-#pragma mark - UI
+#pragma mark - 日志
 
 - (void)log:(NSString *)fmt, ... {
     va_list ap;
     va_start(ap, fmt);
     NSString *line = [[NSString alloc] initWithFormat:fmt arguments:ap];
     va_end(ap);
+
+    if (!self.logBuffer) self.logBuffer = [NSMutableString string];
+    [self.logBuffer appendFormat:@"%@\n", line];
 
     NSString *dir = [self workDir];
     [[NSFileManager defaultManager] createDirectoryAtPath:dir
@@ -798,14 +633,98 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     }
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSString *old = self.logView.text ?: @"";
-        self.logView.text = [old stringByAppendingFormat:@"%@\n", line];
-        if (self.logView.text.length > 0) {
-            [self.logView scrollRangeToVisible:
-                NSMakeRange(self.logView.text.length - 1, 1)];
+        UITextView *tv = self.logView;
+        if (!tv) return;
+        tv.text = self.logBuffer;
+        if (tv.text.length > 0) {
+            [tv scrollRangeToVisible:NSMakeRange(tv.text.length - 1, 1)];
         }
     });
 }
+
+- (void)showLogWindow {
+    if (self.logWindow) return;
+    UIWindow *win = self.view.window;
+    if (!win) win = [UIApplication sharedApplication].keyWindow;
+    if (!win) return;
+
+    UIView *dim = [[UIView alloc] initWithFrame:win.bounds];
+    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.42];
+    dim.alpha = 0.0;
+    self.logWindow = dim;
+
+    CGFloat cw = win.bounds.size.width - 40;
+    CGFloat ch = win.bounds.size.height * 0.64;
+    UIView *card = [[UIView alloc] initWithFrame:
+                    CGRectMake(20, (win.bounds.size.height - ch) / 2, cw, ch)];
+    card.backgroundColor = [UIColor whiteColor];
+    card.layer.cornerRadius = 18;
+    card.clipsToBounds = YES;
+    [dim addSubview:card];
+
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(18, 14, cw - 90, 22)];
+    title.text = @"运行日志";
+    title.font = [UIFont boldSystemFontOfSize:16];
+    title.textColor = CLR_TEXT;
+    [card addSubview:title];
+
+    UILabel *hint = [[UILabel alloc] initWithFrame:CGRectMake(18, 34, cw - 90, 16)];
+    hint.text = @"长按可复制";
+    hint.font = [UIFont systemFontOfSize:10];
+    hint.textColor = CLR_SUB;
+    [card addSubview:hint];
+
+    UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
+    close.frame = CGRectMake(cw - 74, 12, 62, 32);
+    [close setTitle:@"关闭" forState:UIControlStateNormal];
+    [close setTitleColor:CLR_GREEN forState:UIControlStateNormal];
+    close.titleLabel.font = [UIFont boldSystemFontOfSize:15];
+    [close addTarget:self action:@selector(hideLogWindow) forControlEvents:UIControlEventTouchUpInside];
+    [card addSubview:close];
+
+    UITextView *tv = [[UITextView alloc] initWithFrame:CGRectMake(12, 56, cw - 24, ch - 68)];
+    tv.editable = NO;
+    tv.font = [UIFont fontWithName:@"Menlo" size:10] ?: [UIFont systemFontOfSize:10];
+    tv.textColor = [UIColor colorWithRed:0.22 green:0.26 blue:0.30 alpha:1.0];
+    tv.backgroundColor = [UIColor colorWithRed:0.97 green:0.98 blue:0.99 alpha:1.0];
+    tv.layer.cornerRadius = 12;
+    tv.textContainerInset = UIEdgeInsetsMake(10, 8, 10, 8);
+    tv.text = self.logBuffer ?: @"";
+    [card addSubview:tv];
+    self.logView = tv;
+
+    UILongPressGestureRecognizer *lp =
+        [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(copyLog)];
+    [tv addGestureRecognizer:lp];
+
+    [win addSubview:dim];
+    [UIView animateWithDuration:0.2 animations:^{ dim.alpha = 1.0; }];
+}
+
+- (void)hideLogWindow {
+    UIView *v = self.logWindow;
+    if (!v) return;
+    self.logWindow = nil;
+    self.logView = nil;
+    [UIView animateWithDuration:0.16 animations:^{
+        v.alpha = 0.0;
+    } completion:^(BOOL finished) {
+        [v removeFromSuperview];
+    }];
+}
+
+- (void)copyLog {
+    UIPasteboard *pb = [UIPasteboard generalPasteboard];
+    pb.string = self.logBuffer ?: @"";
+    UIAlertController *ac = [UIAlertController
+        alertControllerWithTitle:@"已复制日志" message:nil
+                  preferredStyle:UIAlertControllerStyleAlert];
+    [ac addAction:[UIAlertAction actionWithTitle:@"好"
+                                           style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:ac animated:YES completion:nil];
+}
+
+#pragma mark - UI
 
 - (UIButton *)buttonWithTitle:(NSString *)title color:(UIColor *)color action:(SEL)sel {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -815,7 +734,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     b.backgroundColor = color;
     b.layer.cornerRadius = 12;
     b.layer.shadowColor = color.CGColor;
-    b.layer.shadowOpacity = 0.25;
+    b.layer.shadowOpacity = 0.22;
     b.layer.shadowRadius = 6;
     b.layer.shadowOffset = CGSizeMake(0, 3);
     [b addTarget:self action:sel forControlEvents:UIControlEventTouchUpInside];
@@ -849,6 +768,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     if (!self.workQueue) {
         self.workQueue = dispatch_queue_create("com.local.wvfix.patch", DISPATCH_QUEUE_SERIAL);
     }
+    if (!self.logBuffer) self.logBuffer = [NSMutableString string];
 
     self.view.backgroundColor = [UIColor whiteColor];
     self.title = @"微版助手";
@@ -856,16 +776,23 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     self.bgLayer = [CAGradientLayer layer];
     self.bgLayer.colors = @[
         (id)[UIColor colorWithRed:0.96 green:0.98 blue:0.97 alpha:1.0].CGColor,
-        (id)[UIColor colorWithRed:0.90 green:0.96 blue:0.93 alpha:1.0].CGColor,
+        (id)[UIColor colorWithRed:0.89 green:0.96 blue:0.92 alpha:1.0].CGColor,
     ];
     self.bgLayer.startPoint = CGPointMake(0, 0);
     self.bgLayer.endPoint = CGPointMake(1, 1);
     [self.view.layer insertSublayer:self.bgLayer atIndex:0];
 
+    UIButton *logBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    [logBtn setTitle:@"日志" forState:UIControlStateNormal];
+    [logBtn setTitleColor:CLR_GREEN forState:UIControlStateNormal];
+    logBtn.titleLabel.font = [UIFont boldSystemFontOfSize:15];
+    logBtn.frame = CGRectMake(0, 0, 44, 32);
+    [logBtn addTarget:self action:@selector(showLogWindow) forControlEvents:UIControlEventTouchUpInside];
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:logBtn];
+
     CGFloat w = self.view.bounds.size.width;
     CGFloat top = 12;
 
-    // 卡片
     self.cardView = [[UIView alloc] initWithFrame:CGRectMake(16, top, w - 32, 236)];
     self.cardView.backgroundColor = CLR_CARD;
     self.cardView.layer.cornerRadius = 18;
@@ -925,33 +852,86 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 
     self.cardView.frame = CGRectMake(16, top, w - 32, y + 56);
 
-    // 日志区
-    CGFloat ly = top + self.cardView.frame.size.height + 14;
-    UILabel *logTitle = [[UILabel alloc] initWithFrame:CGRectMake(24, ly, w - 48, 16)];
-    logTitle.text = @"运行日志（长按可复制）";
-    logTitle.font = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium];
-    logTitle.textColor = CLR_SUB;
-    [self.view addSubview:logTitle];
+    // 常驻教程面板
+    CGFloat ty = top + self.cardView.frame.size.height + 12;
+    UIScrollView *tut = [[UIScrollView alloc] initWithFrame:CGRectMake(16, ty, w - 32,
+                                                                      self.view.bounds.size.height - ty - 12)];
+    tut.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.86];
+    tut.layer.cornerRadius = 18;
+    tut.showsVerticalScrollIndicator = NO;
+    [self.view addSubview:tut];
 
-    self.logView = [[UITextView alloc] initWithFrame:CGRectMake(16, ly + 20, w - 32,
-                                                               self.view.bounds.size.height - ly - 36)];
-    self.logView.editable = NO;
-    self.logView.font = [UIFont fontWithName:@"Menlo" size:10] ?: [UIFont systemFontOfSize:10];
-    self.logView.textColor = [UIColor colorWithRed:0.22 green:0.26 blue:0.30 alpha:1.0];
-    self.logView.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.82];
-    self.logView.layer.cornerRadius = 14;
-    self.logView.layer.borderWidth = 1.0;
-    self.logView.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.9].CGColor;
-    self.logView.textContainerInset = UIEdgeInsetsMake(10, 8, 10, 8);
-    [self.view addSubview:self.logView];
+    CGFloat iw = w - 32 - 36;
+    CGFloat cy = 16;
 
-    UILongPressGestureRecognizer *lp =
-        [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(copyLog)];
-    [self.logView addGestureRecognizer:lp];
+    UILabel *tTitle = [[UILabel alloc] initWithFrame:CGRectMake(18, cy, iw, 22)];
+    tTitle.text = @"使用教程";
+    tTitle.font = [UIFont boldSystemFontOfSize:15];
+    tTitle.textColor = CLR_TEXT;
+    [tut addSubview:tTitle];
+    cy += 24;
+
+    UILabel *tSub = [[UILabel alloc] initWithFrame:CGRectMake(18, cy, iw, 18)];
+    tSub.text = @"全程请保持微信挂在后台运行";
+    tSub.font = [UIFont systemFontOfSize:11.5];
+    tSub.textColor = CLR_SUB;
+    [tut addSubview:tSub];
+    cy += 26;
+
+    NSArray *steps = @[
+        @[@"1", @"点「改写全部版本字段」（绿色按钮）", CLR_GREEN],
+        @[@"2", @"点「重建图标缓存」（橙色按钮），期间会黑屏刷新几秒，属正常", CLR_ORANGE],
+        @[@"3", @"黑屏结束后，从后台进入微信，正常登录即可", CLR_BLUE],
+        @[@"4", @"确认登录成功后，才点「还原到改前版本」（灰色按钮）", CLR_GRAY],
+    ];
+
+    for (NSArray *s in steps) {
+        UIView *row = [self tutorialRow:s[0] text:s[1] y:cy width:iw color:s[2]];
+        [tut addSubview:row];
+        cy += 48;
+    }
+
+    UIView *note = [[UIView alloc] initWithFrame:CGRectMake(18, cy + 2, iw, 74)];
+    note.backgroundColor = [UIColor colorWithRed:0.98 green:0.96 blue:0.90 alpha:1.0];
+    note.layer.cornerRadius = 12;
+    [tut addSubview:note];
+
+    UILabel *noteText = [[UILabel alloc] initWithFrame:CGRectMake(12, 8, iw - 24, 58)];
+    noteText.text = @"第 4 步在确认登录成功后再执行：还原只改回版本号，已登录的微信不受影响，"
+                    @"且 plist 与签名重新一致，桌面图标也会恢复正常。"
+                    @"微信被系统回收或手动关闭后，重新登录会再次提示版本过低，届时重做第 1、2 步即可。";
+    noteText.numberOfLines = 0;
+    noteText.font = [UIFont systemFontOfSize:11];
+    noteText.textColor = [UIColor colorWithRed:0.55 green:0.42 blue:0.10 alpha:1.0];
+    [note addSubview:noteText];
+
+    tut.contentSize = CGSizeMake(w - 32, cy + 92);
 
     [self refresh];
-    [self setupHelpButton];
-    [self maybeShowTutorial];
+}
+
+- (UIView *)tutorialRow:(NSString *)index text:(NSString *)text
+                       y:(CGFloat)y width:(CGFloat)w color:(UIColor *)color {
+    UIView *row = [[UIView alloc] initWithFrame:CGRectMake(18, y, w, 44)];
+
+    UILabel *dot = [[UILabel alloc] initWithFrame:CGRectMake(0, 1, 22, 22)];
+    dot.text = index;
+    dot.textAlignment = NSTextAlignmentCenter;
+    dot.font = [UIFont boldSystemFontOfSize:12];
+    dot.textColor = [UIColor whiteColor];
+    dot.backgroundColor = color;
+    dot.layer.cornerRadius = 11;
+    dot.clipsToBounds = YES;
+    [row addSubview:dot];
+
+    UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(32, 0, w - 32, 44)];
+    t.text = text;
+    t.numberOfLines = 0;
+    t.font = [UIFont systemFontOfSize:12.5];
+    t.textColor = CLR_TEXT;
+    [row addSubview:t];
+
+    return row;
 }
 
 - (void)viewDidLayoutSubviews {
