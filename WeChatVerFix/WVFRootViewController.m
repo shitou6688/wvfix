@@ -1,11 +1,11 @@
 //
 //  WVFRootViewController.m
 //  微信版本伪装 — 一键改写 WeChat.app/Info.plist 的版本号
-//  v1.0.1
-//   - 移除 platform-application（它会让系统把本 app 当系统应用，反而限制写用户 app bundle）
-//   - 优先就地写入（不动 inode、不依赖目录写权限，避免 rename 被拒）
-//   - 两级 root 兜底：persona spawn 的 /bin/cp、/usr/bin/plutil
-//   - 失败时打印文件/目录属主与 errno，便于定位
+//  v1.0.2
+//  entitlements 与 v1.0.0 完全一致（v1.0.0 启动正常）。
+//  唯一行为差异：写入改用就地写（open + write），不再用 atomically:YES，
+//  因为原子写会先建临时文件再 rename，那一步需要目录写权限；
+//  直接覆盖已有文件只需要文件写权限。
 //
 
 #import <UIKit/UIKit.h>
@@ -15,56 +15,10 @@
 #import <unistd.h>
 #import <errno.h>
 #import <string.h>
-#import <sys/wait.h>
 
 extern char **environ;
 
-// 私有 API：以指定 persona（uid/gid=0）启动子进程，头文件默认不导出，手动声明
-extern int posix_spawnattr_set_persona_np(posix_spawnattr_t *attr, int persona, uint32_t flags);
-extern int posix_spawnattr_set_persona_uid_np(posix_spawnattr_t *attr, uid_t uid);
-extern int posix_spawnattr_set_persona_gid_np(posix_spawnattr_t *attr, gid_t gid);
-#ifndef POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE
-#define POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE 1
-#endif
-
 static NSString *const kDefaultVer = @"8.0.90";
-
-#pragma mark - 以 root 身份执行（依赖 com.apple.private.persona-mgmt）
-
-static int spawnPersonaRoot(NSString *path, NSArray<NSString *> *args) {
-    NSMutableArray *argv = [NSMutableArray arrayWithObject:path];
-    [argv addObjectsFromArray:args];
-
-    char **cargv = (char **)calloc(argv.count + 1, sizeof(char *));
-    for (NSUInteger i = 0; i < argv.count; i++) {
-        cargv[i] = strdup([argv[i] UTF8String]);
-    }
-    cargv[argv.count] = NULL;
-
-    posix_spawnattr_t attr;
-    posix_spawnattr_init(&attr);
-    posix_spawnattr_set_persona_np(&attr, 99, POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE);
-    posix_spawnattr_set_persona_uid_np(&attr, 0);
-    posix_spawnattr_set_persona_gid_np(&attr, 0);
-
-    pid_t pid = 0;
-    int rc = posix_spawn(&pid, cargv[0], NULL, &attr, cargv, environ);
-    posix_spawnattr_destroy(&attr);
-
-    for (NSUInteger i = 0; i < argv.count; i++) free(cargv[i]);
-    free(cargv);
-
-    if (rc != 0) return -1000 - rc;
-
-    int status = 0;
-    waitpid(pid, &status, 0);
-    if (WIFEXITED(status)) return WEXITSTATUS(status);
-    return -1;
-}
-
-static BOOL fileExistsAt(NSString *p) {
-    return [[NSFileManager defaultManager] fileExistsAtPath:p];
-}
 
 @interface WVFRootViewController : UIViewController
 @property (nonatomic, strong) UILabel *statusLabel;
@@ -152,7 +106,7 @@ static BOOL fileExistsAt(NSString *p) {
     return out;
 }
 
-// 就地写：只要求文件本身可写，不需要目录写权限（原子写的 rename 才需要）
+// 就地写：只要求文件本身可写，不需要目录写权限
 - (BOOL)writeInPlace:(NSData *)data toPath:(NSString *)path {
     int fd = open(path.UTF8String, O_WRONLY | O_TRUNC);
     if (fd < 0) return NO;
@@ -177,29 +131,9 @@ static BOOL fileExistsAt(NSString *p) {
     NSError *err = nil;
     NSDictionary *a = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:&err];
     if (!a) return [NSString stringWithFormat:@"(%@)", err.localizedDescription];
-    return [NSString stringWithFormat:@"owner=%@ group=%@ perm=%o",
+    return [NSString stringWithFormat:@"owner=%@ group=%@ perm=%@",
             a[NSFileOwnerAccountName], a[NSFileGroupOwnerAccountName],
-            (unsigned int)[a[NSFilePosixPermissions] shortValue]];
-}
-
-// root 兜底之一：先写到可写目录，再 root cp 覆盖目标
-- (BOOL)rootCopyFallback:(NSData *)data {
-    NSString *tmp = [[self workDir] stringByAppendingPathComponent:@"patch.tmp.plist"];
-    if (![data writeToFile:tmp atomically:YES]) return NO;
-    if (!fileExistsAt(@"/bin/cp")) return NO;
-    int rc = spawnPersonaRoot(@"/bin/cp", @[tmp, [self plistPath]]);
-    [self log:@"[i] root cp 兜底：rc=%d", rc];
-    return rc == 0;
-}
-
-// root 兜底之二：plutil 直接改键（老系统可能不支持 -replace）
-- (BOOL)rootPlutilFallback:(NSString *)newVer {
-    if (!fileExistsAt(@"/usr/bin/plutil")) return NO;
-    int rc = spawnPersonaRoot(@"/usr/bin/plutil",
-                              @[@"-replace", @"CFBundleShortVersionString",
-                                @"-string", newVer, [self plistPath]]);
-    [self log:@"[i] root plutil 兜底：rc=%d", rc];
-    return rc == 0;
+            a[NSFilePosixPermissions]];
 }
 
 - (BOOL)writeVersion:(NSString *)newVer error:(NSString **)errOut {
@@ -211,7 +145,7 @@ static BOOL fileExistsAt(NSString *p) {
     }
     NSString *p = [self plistPath];
 
-    // 1) 就地写
+    // 1) 就地写（首选）
     if ([self writeInPlace:out toPath:p]) {
         [self log:@"[i] 写入方式：就地写"];
         return YES;
@@ -219,7 +153,7 @@ static BOOL fileExistsAt(NSString *p) {
     int e1 = errno;
     [self log:@"[!] 就地写失败 errno=%d (%s)", e1, strerror(e1)];
 
-    // 2) 原子写
+    // 2) 原子写（目录可写时可行）
     NSError *e2 = nil;
     if ([out writeToFile:p options:0 error:&e2]) {
         [self log:@"[i] 写入方式：原子写"];
@@ -227,19 +161,9 @@ static BOOL fileExistsAt(NSString *p) {
     }
     [self log:@"[!] 原子写失败：%@", e2.localizedDescription ?: @"?"];
 
-    // 3) root 兜底
-    if ([self rootCopyFallback:out]) {
-        [self log:@"[i] 写入方式：root cp"];
-        return YES;
-    }
-    if ([self rootPlutilFallback:newVer]) {
-        [self log:@"[i] 写入方式：root plutil"];
-        return YES;
-    }
-
-    // 4) 诊断
+    // 3) 诊断
     NSMutableString *diag = [NSMutableString string];
-    [diag appendFormat:@"全部写入方式失败\n文件 %@\n目录 %@\n",
+    [diag appendFormat:@"两种写入都失败\n文件 %@\n目录 %@",
         [self describeItem:p], [self describeItem:[p stringByDeletingLastPathComponent]]];
     if (errOut) *errOut = diag;
     return NO;
@@ -298,33 +222,16 @@ static BOOL fileExistsAt(NSString *p) {
     NSData *d = [NSData dataWithContentsOfFile:src];
     if (!d) return NO;
     if ([self writeInPlace:d toPath:[self plistPath]]) return YES;
-    if ([d writeToFile:[self plistPath] options:0 error:NULL]) return YES;
-    return [self rootCopyFallback:d];
+    return [d writeToFile:[self plistPath] options:0 error:NULL];
 }
 
 #pragma mark - 杀进程
 
 - (void)killWeChat {
-    NSArray *cands = @[@[@"/usr/bin/killall", @"-9", @"WeChat"],
-                       @[@"/bin/kill", @"-9", @"WeChat"]];
-    for (NSArray *argv in cands) {
-        NSString *tool = argv[0];
-        if (!fileExistsAt(tool)) continue;
-        NSArray *args = [argv subarrayWithRange:NSMakeRange(1, argv.count - 1)];
-        if (spawnPersonaRoot(tool, args) == 0) {
-            [self log:@"已结束微信进程"];
-            return;
-        }
-        pid_t pid = 0;
-        char *cargv[4] = {(char *)[tool UTF8String], (char *)"-9",
-                          (char *)"WeChat", NULL};
-        if (posix_spawn(&pid, cargv[0], NULL, NULL, cargv, environ) == 0) {
-            [self log:@"已结束微信进程（当前用户）"];
-            return;
-        }
-        break;
-    }
-    [self log:@"结束进程失败，请手动上滑关掉微信"];
+    pid_t pid = 0;
+    char *argv[] = { (char *)"killall", (char *)"-9", (char *)"WeChat", NULL };
+    int r = posix_spawn(&pid, "/usr/bin/killall", NULL, NULL, argv, environ);
+    [self log:(r == 0 ? @"已结束微信进程" : @"结束进程失败，请手动上滑关掉微信")];
 }
 
 #pragma mark - UI
