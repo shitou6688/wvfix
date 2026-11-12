@@ -2,6 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- 与 TrollStore 本体同一套基础权限 -->
 	<key>platform-application</key>
 	<true/>
 	<key>com.apple.private.security.no-sandbox</key>
@@ -10,9 +11,25 @@
 	<false/>
 	<key>com.apple.private.security.storage.AppDataContainers</key>
 	<true/>
-	<!-- root 通道：以 uid/gid=0 spawn /bin/cp 覆盖 _installd 拥有的 Info.plist -->
+
+	<!-- 关键：整个文件系统读写豁免（TrollStore 本体就是这么拿的） -->
+	<key>com.apple.security.exception.files.absolute-path.read-write</key>
+	<array>
+		<string>/</string>
+	</array>
+
+	<!-- 关键：app bundle 存储域 + 让子进程继承豁免（RootHelper 用的） -->
+	<key>com.apple.private.security.storage.AppBundles</key>
+	<true/>
+	<key>com.apple.private.security.storage.MobileDocuments</key>
+	<true/>
+	<key>com.apple.private.security.storage-exempt.heritable</key>
+	<true/>
+
+	<!-- root 通道 -->
 	<key>com.apple.private.persona-mgmt</key>
 	<true/>
+
 	<key>get-task-allow</key>
 	<true/>
 </dict>

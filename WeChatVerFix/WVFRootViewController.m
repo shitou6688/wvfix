@@ -1,12 +1,11 @@
 //
 //  WVFRootViewController.m
 //  微信版本伪装 — 一键改写 WeChat.app/Info.plist 的版本号
-//  v1.0.3
+//  v1.0.5
 //
-//  实测结论：目标文件属主是 _installd、0644，目录 _installd 0755，
-//  普通 mobile 进程无论如何都写不进去（需要 root）。
-//  因此本版增加 root 通道：persona spawn（uid/gid=0）执行 /bin/cp 覆盖。
-//  私有符号用 dlsym 动态解析，缺失时只降级、不会因链接失败而闪退。
+//  依据实测：目标 Info.plist 属主 _installd、0644，直接写返回 EPERM(沙盒拒绝)。
+//  解法：补上 TrollStore 本体/RootHelper 用的文件系统豁免权限，
+//        并保留 persona root 通道（用真实存在的工具，不再猜 /bin/ls）。
 //
 
 #import <UIKit/UIKit.h>
@@ -24,7 +23,7 @@ extern char **environ;
 
 static NSString *const kDefaultVer = @"8.0.90";
 
-#pragma mark - root 通道（dlsym，符号缺失也不会崩）
+#pragma mark - root 通道
 
 typedef int (*persona_np_fn)(posix_spawnattr_t *, int, uint32_t);
 typedef int (*persona_id_fn)(posix_spawnattr_t *, id_t);
@@ -51,11 +50,15 @@ static void resolvePersona(void) {
 
 #define WVF_PERSONA_FLAGS_OVERRIDE 1
 
-// 以 uid/gid=0 执行一个外部程序，返回 exit code；<0 表示根本没起来
-static int spawnRootFlags(NSString *path, NSArray<NSString *> *args, uint32_t flags) {
+// 以 uid/gid=0 spawn；stdoutPath 非空时把子进程 stdout 重定向到该文件（可用 cat 覆盖目标）
+static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
+                         uint32_t flags, NSString *stdoutPath, int *spawnErr) {
     resolvePersona();
-    if (!g_personaAvailable) return -1;
-    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) return -2;
+    if (spawnErr) *spawnErr = 0;
+    if (!g_personaAvailable) {
+        if (spawnErr) *spawnErr = -1;
+        return -1000;
+    }
 
     NSMutableArray *argv = [NSMutableArray arrayWithObject:path];
     [argv addObjectsFromArray:args];
@@ -70,22 +73,34 @@ static int spawnRootFlags(NSString *path, NSArray<NSString *> *args, uint32_t fl
     g_setPersonaUid(&attr, 0);
     g_setPersonaGid(&attr, 0);
 
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    if (stdoutPath.length) {
+        posix_spawn_file_actions_addopen(&fa, STDOUT_FILENO, stdoutPath.UTF8String,
+                                         O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    }
+
     pid_t pid = 0;
-    int rc = posix_spawn(&pid, cargv[0], NULL, &attr, cargv, environ);
+    int rc = posix_spawn(&pid, cargv[0], &fa, &attr, cargv, environ);
+    posix_spawn_file_actions_destroy(&fa);
     posix_spawnattr_destroy(&attr);
 
     for (NSUInteger i = 0; i < argv.count; i++) free(cargv[i]);
     free(cargv);
 
-    if (rc != 0) return -1000 - rc;
+    if (rc != 0) {
+        if (spawnErr) *spawnErr = rc;
+        return -1100;   // -1100 - rc 不再叠加，rc 单独返回
+    }
 
     int status = 0;
     waitpid(pid, &status, 0);
-    return WIFEXITED(status) ? WEXITSTATUS(status) : -3;
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    return -1;
 }
 
 static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
-    return spawnRootFlags(path, args, WVF_PERSONA_FLAGS_OVERRIDE);
+    return spawnRootFull(path, args, WVF_PERSONA_FLAGS_OVERRIDE, nil, NULL);
 }
 
 @interface WVFRootViewController : UIViewController
@@ -134,6 +149,10 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
 
 - (NSString *)backupDir {
     return [[self workDir] stringByAppendingPathComponent:@"backup"];
+}
+
+- (NSString *)toolList {
+    return [NSString stringWithFormat:@"%@/tools.txt", [self workDir]];
 }
 
 #pragma mark - 读写版本号
@@ -199,8 +218,18 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
             a[NSFilePosixPermissions]];
 }
 
-// 把内容写到 mobile 可写的目录，再由 root 覆盖目标
-- (BOOL)rootCopyFallback:(NSData *)data {
+- (NSArray<NSString *> *)candidateTools {
+    return @[
+        @"/bin/cp", @"/usr/bin/cp",
+        @"/bin/cat", @"/usr/bin/cat",
+        @"/bin/dd", @"/usr/bin/dd",
+        @"/bin/ls", @"/usr/bin/ls",
+        @"/usr/bin/killall", @"/usr/bin/plutil",
+        @"/bin/launchctl", @"/usr/bin/id",
+    ];
+}
+
+- (BOOL)rootWriteViaTools:(NSData *)data {
     NSFileManager *fm = [NSFileManager defaultManager];
     [fm createDirectoryAtPath:[self workDir] withIntermediateDirectories:YES attributes:nil error:NULL];
 
@@ -212,26 +241,36 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     }
     [self log:@"[i] 临时文件已写：%@", tmp];
 
-    // 优先 cp，其次 cat
-    NSArray *cands = @[
-        @[@"/bin/cp", tmp, [self plistPath]],
-        @[@"/usr/bin/cp", tmp, [self plistPath]],
-        @[@"/bin/cat", tmp],
-    ];
+    NSString *target = [self plistPath];
 
-    for (NSArray *c in cands) {
-        NSString *tool = c[0];
-        if (![fm fileExistsAtPath:tool]) continue;
-
-        if ([tool hasSuffix:@"cat"]) {
-            // cat 需要 shell 重定向，iOS 无 sh，跳过
-            continue;
-        }
-        NSArray *args = [c subarrayWithRange:NSMakeRange(1, c.count - 1)];
-        int rc = spawnRoot(tool, args);
-        [self log:@"[i] root %@：rc=%d", [tool lastPathComponent], rc];
+    // A. cp 覆盖
+    for (NSString *cp in @[@"/bin/cp", @"/usr/bin/cp"]) {
+        if (![fm fileExistsAtPath:cp]) continue;
+        int err = 0;
+        int rc = spawnRootFull(cp, @[tmp, target], WVF_PERSONA_FLAGS_OVERRIDE, nil, &err);
+        [self log:@"[i] root cp(%@) rc=%d spawnErr=%d", cp, rc, err];
         if (rc == 0) return YES;
     }
+
+    // B. cat 输出重定向到目标
+    for (NSString *cat in @[@"/bin/cat", @"/usr/bin/cat"]) {
+        if (![fm fileExistsAtPath:cat]) continue;
+        int err = 0;
+        int rc = spawnRootFull(cat, @[tmp], WVF_PERSONA_FLAGS_OVERRIDE, target, &err);
+        [self log:@"[i] root cat(%@)>target rc=%d spawnErr=%d", cat, rc, err];
+        if (rc == 0) return YES;
+    }
+
+    // C. dd
+    for (NSString *dd in @[@"/bin/dd", @"/usr/bin/dd"]) {
+        if (![fm fileExistsAtPath:dd]) continue;
+        int err = 0;
+        NSString *spec = [NSString stringWithFormat:@"if=%@ of=%@", tmp, target];
+        int rc = spawnRootFull(dd, @[spec], WVF_PERSONA_FLAGS_OVERRIDE, nil, &err);
+        [self log:@"[i] root dd(%@) rc=%d spawnErr=%d", dd, rc, err];
+        if (rc == 0) return YES;
+    }
+
     return NO;
 }
 
@@ -244,26 +283,31 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     }
     NSString *p = [self plistPath];
 
-    // 1) 就地写
+    // 1) 就地写（补了文件系统豁免后，这一步可能直接成）
     if ([self writeInPlace:out toPath:p]) {
-        [self log:@"[i] 写入方式：就地写（当前用户）"];
+        [self log:@"[i] 写入方式：就地写"];
         return YES;
     }
     int e1 = errno;
-    [self log:@"[!] 就地写失败 errno=%d (%s)", e1, strerror(e1)];
+    NSString *e1Text = [NSString stringWithUTF8String:strerror(e1)];
+    [self log:@"[!] 就地写失败 errno=%d %@", e1, e1Text];
 
     // 2) root 通道
-    if ([self rootCopyFallback:out]) {
-        [self log:@"[i] 写入方式：root cp"];
+    if ([self rootWriteViaTools:out]) {
+        [self log:@"[i] 写入方式：root 工具"];
         return YES;
     }
 
-    // 3) 诊断
+    // 3) 原子写
+    NSError *e2 = nil;
+    if ([out writeToFile:p options:0 error:&e2]) {
+        [self log:@"[i] 写入方式：原子写"];
+        return YES;
+    }
+
     NSMutableString *diag = [NSMutableString string];
-    [diag appendFormat:@"就地写与 root 通道均失败\n文件 %@\n目录 %@\npersona 符号=%d",
-        [self describeItem:p],
-        [self describeItem:[p stringByDeletingLastPathComponent]],
-        g_personaAvailable ? 1 : 0];
+    [diag appendFormat:@"全部写入方式失败\n文件 %@\n目录 %@",
+        [self describeItem:p], [self describeItem:[p stringByDeletingLastPathComponent]]];
     if (errOut) *errOut = diag;
     return NO;
 }
@@ -315,25 +359,24 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
 }
 
 - (BOOL)restoreBackup:(NSString *)name {
-    NSString *src = [self.backupDir stringByAppendingPathComponent:name];
+    NSString *src = [[self backupDir] stringByAppendingPathComponent:name];
     NSData *d = [NSData dataWithContentsOfFile:src];
     if (!d) return NO;
     if ([self writeInPlace:d toPath:[self plistPath]]) return YES;
-    return [self rootCopyFallback:d];
+    return [self rootWriteViaTools:d];
 }
 
 #pragma mark - 杀进程
 
 - (void)killWeChat {
-    int rc = spawnRoot(@"/usr/bin/killall", @[@"-9", @"WeChat"]);
-    if (rc == 0) {
-        [self log:@"已结束微信进程"];
+    if (spawnRoot(@"/usr/bin/killall", @[@"-9", @"WeChat"]) == 0) {
+        [self log:@"已结束微信进程（root）"];
         return;
     }
     pid_t pid = 0;
     char *argv[] = { (char *)"killall", (char *)"-9", (char *)"WeChat", NULL };
     if (posix_spawn(&pid, "/usr/bin/killall", NULL, NULL, argv, environ) == 0) {
-        [self log:@"已结束微信进程（当前用户）"];
+        [self log:@"已结束微信进程"];
         return;
     }
     [self log:@"结束进程失败，请手动上滑关掉微信"];
@@ -419,11 +462,21 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     [self refresh];
 }
 
+- (NSString *)listDir:(NSString *)dir limit:(NSUInteger)limit {
+    NSArray *items = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:dir error:NULL];
+    if (!items) return @"(列不出)";
+    NSArray *sorted = [items sortedArrayUsingSelector:@selector(compare:)];
+    if (sorted.count > limit) {
+        sorted = [sorted subarrayWithRange:NSMakeRange(0, limit)];
+    }
+    return [sorted componentsJoinedByString:@" "];
+}
+
 - (void)refresh {
     self.appPath = [self findWeChatApp];
     if (!self.appPath) {
         self.statusLabel.text = @"没找到 WeChat.app";
-        self.pathLabel.text = @"确认微信已安装。若已安装仍找不到，说明本 app 没拿到 no-sandbox 权限。";
+        self.pathLabel.text = @"确认微信已安装。";
         [self log:@"[x] 扫描失败：没有 WeChat.app"];
         return;
     }
@@ -433,55 +486,30 @@ static int spawnRoot(NSString *path, NSArray<NSString *> *args) {
     [self log:@"[+] 找到微信：%@", self.appPath];
     [self log:@"[i] 当前版本：%@", self.currentVer ?: @"未知"];
     [self log:@"[i] 文件属性：%@", [self describeItem:[self plistPath]]];
+    [self log:@"[i] 目录属性：%@",
+        [self describeItem:[[self plistPath] stringByDeletingLastPathComponent]]];
 
     resolvePersona();
     [self log:@"[i] persona 符号：%@", g_personaAvailable ? @"可用" : @"缺失"];
-    [self runDiagnostics];
-}
 
-- (void)runDiagnostics {
-    NSMutableString *s = [NSMutableString string];
-    [s appendString:@"==== WeChatVerFix 诊断 ====\n"];
-    [s appendFormat:@"uid=%d euid=%d gid=%d\n", getuid(), geteuid(), getgid()];
-    [s appendFormat:@"persona symbols=%d\n", g_personaAvailable ? 1 : 0];
-    [s appendFormat:@"plist=%s\n", [[self plistPath] UTF8String]];
+    // 枚举系统工具，落盘 tools.txt
+    NSMutableString *tools = [NSMutableString string];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    [fm createDirectoryAtPath:[self workDir] withIntermediateDirectories:YES attributes:nil error:NULL];
 
-    struct stat st;
-    if (stat([[self plistPath] UTF8String], &st) == 0) {
-        [s appendFormat:@"plist mode=%o uid=%d gid=%d\n", st.st_mode & 07777, st.st_uid, st.st_gid];
-    } else {
-        [s appendFormat:@"plist stat errno=%d %s\n", errno, strerror(errno)];
+    for (NSString *dir in @[@"/bin", @"/usr/bin", @"/sbin", @"/usr/sbin"]) {
+        NSString *listing = [self listDir:dir limit:80];
+        [tools appendFormat:@"%@: %@\n", dir, listing];
+        [self log:@"[i] %@ -> %@", dir, listing];
     }
-
-    int rc1 = spawnRootFlags(@"/bin/ls", @[@"/"], 1);
-    [s appendFormat:@"spawn(/bin/ls, flags=1)=%d\n", rc1];
-    int rc0 = spawnRootFlags(@"/bin/ls", @[@"/"], 0);
-    [s appendFormat:@"spawn(/bin/ls, flags=0)=%d\n", rc0];
-
-    errno = 0;
-    int ch = chmod([[self plistPath] UTF8String], 0666);
-    int chErr = errno;
-    NSString *chText = (ch == 0) ? @"ok" : [NSString stringWithUTF8String:strerror(chErr)];
-    [s appendFormat:@"chmod(plist,0666)=%d errno=%d %@\n", ch, chErr, chText];
-
-    errno = 0;
-    int fd = open([[self plistPath] UTF8String], O_WRONLY);
-    int fdErr = errno;
-    NSString *fdText = (fd >= 0) ? @"ok" : [NSString stringWithUTF8String:strerror(fdErr)];
-    [s appendFormat:@"open(O_WRONLY)=%d errno=%d %@\n", fd, fdErr, fdText];
-    if (fd >= 0) close(fd);
-
-    [s appendString:@"==== end ====\n"];
-
-    NSString *diagPath = [[self workDir] stringByAppendingPathComponent:@"diag.txt"];
-    [[NSFileManager defaultManager] createDirectoryAtPath:[self workDir]
-                              withIntermediateDirectories:YES attributes:nil error:NULL];
-    [s writeToFile:diagPath atomically:YES encoding:NSUTF8StringEncoding error:NULL];
-
-    for (NSString *line in [s componentsSeparatedByString:@"\n"]) {
-        if (line.length) [self log:@"%@", line];
+    [tools appendString:@"\n候选工具存在性:\n"];
+    for (NSString *t in [self candidateTools]) {
+        BOOL ex = [fm fileExistsAtPath:t];
+        [tools appendFormat:@"%@ = %d\n", t, ex ? 1 : 0];
+        if (ex) [self log:@"[i] 存在：%@", t];
     }
-    [self log:@"[i] 诊断已存盘：%@", diagPath];
+    [tools writeToFile:[self toolList] atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+    [self log:@"[i] 工具清单：%@", [self toolList]];
 }
 
 - (void)onPatch {
