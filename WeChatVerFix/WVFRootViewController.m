@@ -25,7 +25,6 @@
 #import <sys/un.h>
 #import "WVFLicense.h"
 #import "WVFCrash.h"
-#import "WVFLSRegister.h"
 #import "WVFGateViewController.h"
 #import "WeChatVerFix-Swift.h"
 
@@ -825,35 +824,6 @@ static void wvfCleanRestrictionsInApp(void)
             self.currentBundleVer = rb;
             [self log:@"[+] 写入成功，回读：显示 %@ / 上报 %@", rs ?: @"?", rb ?: @"?"];
             [self killWeChat];
-            // === 实验：让系统重新登记微信 bundle，免去重启桌面 ===
-            NSString *regReply = wvfDaemonCall([@"LSREGISTER " stringByAppendingString:self.appPath]);
-            if (!regReply) {
-                BOOL okApp = wvfLSRegisterURLInApp(self.appPath);
-                regReply = okApp ? @"OK 已登记（应用内）" : @"ERR 应用内登记失败";
-            }
-            [self log:@"[i] 实验：LSRegisterURL → %@", regReply];
-
-            // 只刷新微信这一条系统登记（不重启桌面）
-            NSString *ucReply = wvfDaemonCall([@"UICACHEP " stringByAppendingString:self.appPath]);
-            [self log:@"[i] 实验：uicache -p → %@", ucReply ?: @"无 uicache"];
-
-            sleep(2);
-            NSString *lsVer = wvfDaemonCall(@"LSVER com.tencent.xin");
-            if (!lsVer) {
-                NSString *v = wvfLSVersionInApp(@"com.tencent.xin");
-                lsVer = v ? [NSString stringWithFormat:@"OK %@", v] : @"ERR 查不到";
-            }
-            [self log:@"[i] 实验：系统登记版本 → %@", lsVer];
-
-            BOOL lsOK = (rb.length > 0 && [lsVer hasPrefix:@"OK"] && [lsVer containsString:rb]);
-            if (lsOK) {
-                [self log:@"[+] 实验成功：系统已登记新版本，理论上不必重建缓存"];
-                [self setResult:[NSString stringWithFormat:@"✓ 已刷新系统登记 · %@（可不重建）", lsVer]
-                          color:CLR_GREEN];
-            } else {
-                [self log:@"[!] 实验未生效：仍建议点「重建缓存」"];
-            }
-
             [self log:@"[i] 已生效。若桌面图标点不动，点「重建缓存」"];
             [self setResult:[NSString stringWithFormat:@"✓ 改写成功 · 显示 %@ · 上报 %@",
                              rs ?: @"?", rb ?: @"?"] color:CLR_GREEN];
@@ -931,11 +901,6 @@ static void wvfCleanRestrictionsInApp(void)
         [weakSelf onPurgeRecordsOnly];
     }]];
 
-    [ac addAction:[UIAlertAction actionWithTitle:@"完整重登记 App（实验）"
-                                           style:UIAlertActionStyleDefault
-                                         handler:^(UIAlertAction *a) {
-        [weakSelf onRegisterAllApps];
-    }]];
 
     [ac addAction:[UIAlertAction actionWithTitle:@"取消"
                                            style:UIAlertActionStyleCancel handler:nil]];
@@ -1029,24 +994,6 @@ static void wvfCleanRestrictionsInApp(void)
     });
 }
 
-- (void)onRegisterAllApps {
-    self.view.userInteractionEnabled = NO;
-    [self log:@"[i] 实验：完整重登记 App（可能不稳定）"];
-    dispatch_async(self.workQueue, ^{
-        @try {
-            NSMutableString *regLog = [NSMutableString string];
-            int n = WVFRefreshTrollStoreApps(regLog);
-            [self log:@"[i] 完整重登记：%d 个 %@", n, regLog.length ? regLog : @""];
-            [self setResult:[NSString stringWithFormat:@"重登记完成：%d 个", n] color:CLR_GREEN];
-        } @catch (NSException *e) {
-            [self log:@"[!] 重登记异常：%@", e.reason];
-            [self setResult:@"✗ 重登记异常" color:CLR_RED];
-        }
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self.view.userInteractionEnabled = YES;
-        });
-    });
-}
 
 - (void)onPurgeRecordsOnly {
     self.view.userInteractionEnabled = NO;
