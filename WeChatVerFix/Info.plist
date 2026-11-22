@@ -17,7 +17,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.4.0</string>
+	<string>2.5.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>LSRequiresIPhoneOS</key>
@@ -69,7 +69,7 @@
 		</dict>
 	</dict>
 	<key>WVFLicenseServer</key>
-	<string>http://124.221.171.80/wvf_api.php</string>
+	<string>https://aa.jm2.top/wvf_api.php</string>
 	<key>WVFLicenseAppID</key>
 	<string>10006</string>
 </dict>

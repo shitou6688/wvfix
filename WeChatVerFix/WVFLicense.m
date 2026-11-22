@@ -403,6 +403,12 @@ typedef CFTypeRef (*MGCopyAnswerFn)(CFStringRef);
         if (err) {
             // NSURLSession 失败 → 改用原始 socket 再试（绕过 ATS / 可达性判断）
             NSData *rawBody = nil;
+            // https 必须由系统做 TLS 校验，socket 走不了 TLS：直接报错
+            if (![urlStr hasPrefix:@"http://"]) {
+                completion(-1, nil, 0, [NSString stringWithFormat:@"网络错误(%ld) %@",
+                            (long)err.code, err.localizedDescription ?: @""]);
+                return;
+            }
             NSString *sockResult = [self httpGetViaSocket:urlStr body:&rawBody];
             if (rawBody.length) {
                 NSDictionary *json2 = [NSJSONSerialization JSONObjectWithData:rawBody
