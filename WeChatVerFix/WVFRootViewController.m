@@ -674,7 +674,6 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     }
     UIWindow *win = self.view.window ?: [UIApplication sharedApplication].keyWindow;
     if (!win) {
-        // 窗口还没挂上，稍后重试（最多持续尝试）
         __weak typeof(self) weakSelf = self;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
@@ -682,7 +681,6 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
         });
         return;
     }
-    if (!win) return;
 
     UIView *dim = [[UIView alloc] initWithFrame:win.bounds];
     dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
@@ -690,7 +688,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 
     CGFloat cw = win.bounds.size.width - 56;
     if (cw > 330) cw = 330;
-    CGFloat ch = 300;
+    CGFloat ch = 336;
     UIView *card = [[UIView alloc] initWithFrame:
                     CGRectMake((win.bounds.size.width - cw) / 2,
                                (win.bounds.size.height - ch) / 2, cw, ch)];
@@ -702,7 +700,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     card.layer.shadowOffset = CGSizeMake(0, 8);
     [dim addSubview:card];
 
-    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(20, 26, cw - 40, 26)];
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(20, 24, cw - 40, 26)];
     title.text = @"激活授权";
     title.textAlignment = NSTextAlignmentCenter;
     title.font = [UIFont boldSystemFontOfSize:19];
@@ -712,31 +710,42 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     [title addGestureRecognizer:[[UILongPressGestureRecognizer alloc]
         initWithTarget:self action:@selector(onSetAppID)]];
 
-    UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(20, 56, cw - 40, 20)];
+    UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(20, 52, cw - 40, 18)];
     sub.text = @"一机一码，激活后可在本机使用";
     sub.textAlignment = NSTextAlignmentCenter;
     sub.font = [UIFont systemFontOfSize:12];
     sub.textColor = CLR_SUB;
     [card addSubview:sub];
 
-    self.gateField = [[UITextField alloc] initWithFrame:CGRectMake(24, 96, cw - 48, 44)];
-    self.gateField.placeholder = @"WVF-XXXXX-XXXXX-XXXXX";
+    // 卡密显示框：禁用交互，点它不会唤起键盘（这是闪退的根源）
+    self.gateField = [[UITextField alloc] initWithFrame:CGRectMake(20, 84, cw - 40, 44)];
+    self.gateField.placeholder = @"下方「粘贴卡密」或「手动输入」";
     self.gateField.textAlignment = NSTextAlignmentCenter;
-    self.gateField.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters;
-    self.gateField.autocorrectionType = UITextAutocorrectionTypeNo;
-    self.gateField.font = [UIFont monospacedDigitSystemFontOfSize:15 weight:UIFontWeightMedium];
+    self.gateField.font = [UIFont monospacedDigitSystemFontOfSize:14 weight:UIFontWeightMedium];
+    self.gateField.textColor = CLR_TEXT;
     self.gateField.backgroundColor = [UIColor colorWithRed:0.95 green:0.97 blue:0.98 alpha:1.0];
     self.gateField.layer.cornerRadius = 10;
     self.gateField.layer.borderWidth = 1;
     self.gateField.layer.borderColor = [UIColor colorWithRed:0.88 green:0.91 blue:0.93 alpha:1].CGColor;
+    self.gateField.userInteractionEnabled = NO;
+    self.gateField.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters;
     [card addSubview:self.gateField];
 
-    UIButton *btn = [self smallButton:@"激活" color:CLR_GREEN action:@selector(onActivatePressed)];
-    btn.frame = CGRectMake(24, 152, cw - 48, 44);
+    CGFloat halfW = (cw - 40 - 10) / 2.0;
+    UIButton *pasteBtn = [self smallButton:@"粘贴卡密" color:CLR_GREEN action:@selector(onPasteKey)];
+    pasteBtn.frame = CGRectMake(20, 138, halfW, 40);
+    [card addSubview:pasteBtn];
+
+    UIButton *manualBtn = [self smallButton:@"手动输入" color:CLR_GRAY action:@selector(onManualInput)];
+    manualBtn.frame = CGRectMake(20 + halfW + 10, 138, halfW, 40);
+    [card addSubview:manualBtn];
+
+    UIButton *btn = [self smallButton:@"激活" color:CLR_BLUE action:@selector(onActivatePressed)];
+    btn.frame = CGRectMake(20, 188, cw - 40, 44);
     btn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
     [card addSubview:btn];
 
-    self.gateStatus = [[UILabel alloc] initWithFrame:CGRectMake(24, 206, cw - 48, 44)];
+    self.gateStatus = [[UILabel alloc] initWithFrame:CGRectMake(20, 240, cw - 40, 36)];
     self.gateStatus.text = message ?: @"";
     self.gateStatus.numberOfLines = 2;
     self.gateStatus.textAlignment = NSTextAlignmentCenter;
@@ -744,19 +753,41 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     self.gateStatus.textColor = CLR_RED;
     [card addSubview:self.gateStatus];
 
-    UILabel *foot = [[UILabel alloc] initWithFrame:CGRectMake(24, 254, cw - 48, 28)];
-    NSInteger d = [[WVFLicense shared] remainDays];
-    foot.text = ([WVFLicense shared].activated && d >= 0)
-        ? [NSString stringWithFormat:@"当前授权剩余 %ld 天", (long)d]
-        : @"";
+    UILabel *foot = [[UILabel alloc] initWithFrame:CGRectMake(20, 280, cw - 40, 34)];
+    foot.text = @"提示：从微信等处复制卡密后点「粘贴卡密」最稳";
+    foot.numberOfLines = 2;
     foot.textAlignment = NSTextAlignmentCenter;
-    foot.font = [UIFont systemFontOfSize:11];
+    foot.font = [UIFont systemFontOfSize:10.5];
     foot.textColor = CLR_SUB;
     [card addSubview:foot];
 
     [win addSubview:dim];
     dim.alpha = 0;
     [UIView animateWithDuration:0.2 animations:^{ dim.alpha = 1.0; }];
+}
+
+- (void)onPasteKey {
+    NSString *s = [UIPasteboard generalPasteboard].string ?: @"";
+    s = [s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (!s.length) {
+        self.gateStatus.textColor = CLR_RED;
+        self.gateStatus.text = @"剪贴板是空的，请先复制卡密";
+        return;
+    }
+    self.gateField.text = [s uppercaseString];
+    self.gateStatus.textColor = CLR_SUB;
+    self.gateStatus.text = @"已粘贴，点「激活」";
+}
+
+- (void)onManualInput {
+    self.gateField.userInteractionEnabled = YES;
+    @try {
+        [self.gateField becomeFirstResponder];
+    } @catch (NSException *e) {
+        [self log:@"[crash] 键盘: %@", e.reason];
+    }
+    self.gateStatus.textColor = CLR_SUB;
+    self.gateStatus.text = @"若弹出键盘时闪退，请改用「粘贴卡密」";
 }
 
 - (void)hideGate {
