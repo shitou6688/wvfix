@@ -465,7 +465,7 @@ typedef CFTypeRef (*MGCopyAnswerFn)(CFStringRef);
             NSDictionary *viaDaemon = [self daemonFetch:urlStr];
             if (viaDaemon) {
                 NSInteger c3 = [viaDaemon[@"code"] integerValue];
-                completion(c3, viaDaemon[@"msg"] ?: @{}, 0, nil);
+                completion(c3, viaDaemon[@"msg"] ?: @{}, wvfVipFromJSON(viaDaemon), nil);
                 return;
             }
 
@@ -481,7 +481,7 @@ typedef CFTypeRef (*MGCopyAnswerFn)(CFStringRef);
                                                                      options:0 error:NULL];
                 if ([json2 isKindOfClass:[NSDictionary class]]) {
                     NSInteger c2 = [json2[@"code"] integerValue];
-                    completion(c2, json2[@"msg"] ?: @{}, 0, nil);
+                    completion(c2, json2[@"msg"] ?: @{}, wvfVipFromJSON(json2), nil);
                     return;
                 }
             }
