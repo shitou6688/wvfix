@@ -261,11 +261,15 @@ static NSString *wvfSafeWorkDir(void)
 
 static void wvfRebuildLSInApp(void)
 {
-    void *handle = dlopen("/System/Library/Frameworks/MobileCoreServices.framework/MobileCoreServices", RTLD_LAZY);
-    if (!handle) {
-        handle = dlopen("/System/Library/Frameworks/CoreServices.framework/CoreServices", RTLD_LAZY);
+    NSArray *fwPaths = @[
+        @"/System/Library/PrivateFrameworks/CoreServicesStore.framework/CoreServicesStore",
+        @"/System/Library/Frameworks/CoreServices.framework/CoreServices",
+        @"/System/Library/PrivateFrameworks/MobileCoreServices.framework/MobileCoreServices",
+        @"/System/Library/Frameworks/MobileCoreServices.framework/MobileCoreServices",
+    ];
+    for (NSString *p in fwPaths) {
+        dlopen(p.fileSystemRepresentation, RTLD_LAZY);
     }
-    if (!handle) return;
 
     Class cls = NSClassFromString(@"LSApplicationWorkspace");
     if (!cls) return;

@@ -30,6 +30,9 @@
 
 extern char **environ;
 
+static id wvfLSWorkspace(void);
+static int wvfPurgeMissingApps(void);
+static BOOL wvfRebuildLSDatabase(void);
 static void wvfCleanRestrictions(void);
 static BOOL wvfShouldRegisterAsUser(void);
 static void wvfRefreshAppRegistrations(void);
@@ -218,10 +221,8 @@ static void wvfCoreRefresh(void)
                                                error:NULL];
 
     // 重建 LaunchServices 应用数据库（TrollStore 同款私有方法）
-    @try {
-        wvfCallRebuildLS();
-    } @catch (NSException *e) {
-    }
+    BOOL lsOK = wvfRebuildLSDatabase();
+    NSLog(@"[wvfix] LS rebuild = %d", lsOK);
 
     // 若有 uicache 再补一遍
     NSArray *uicaches = @[@"/var/jb/usr/bin/uicache", @"/usr/bin/uicache"];
@@ -242,6 +243,8 @@ static void wvfRebuildIconCache(void)
 {
     // 与 TrollStore refresh-all 完全一致的顺序
     wvfCleanRestrictions();
+    int purged = wvfPurgeMissingApps();
+    NSLog(@"[wvfix] purge missing apps = %d", purged);
     wvfCoreRefresh();
     if (!wvfShouldRegisterAsUser()) {
         wvfRefreshAppRegistrations();
@@ -351,15 +354,101 @@ static void wvfRefreshAppRegistrations(void)
     }
 }
 
+#pragma mark - LaunchServices 工作区（关键：类在 CoreServicesStore 里）
+
+static id wvfLSWorkspace(void)
+{
+    static id cached = nil;
+    static BOOL tried = NO;
+    if (cached) return cached;
+    if (tried) return nil;
+    tried = YES;
+
+    NSArray *paths = @[
+        @"/System/Library/PrivateFrameworks/CoreServicesStore.framework/CoreServicesStore",
+        @"/System/Library/Frameworks/CoreServices.framework/CoreServices",
+        @"/System/Library/PrivateFrameworks/MobileCoreServices.framework/MobileCoreServices",
+        @"/System/Library/Frameworks/MobileCoreServices.framework/MobileCoreServices",
+    ];
+    for (NSString *p in paths) {
+        dlopen(p.fileSystemRepresentation, RTLD_LAZY);
+    }
+
+    Class cls = NSClassFromString(@"LSApplicationWorkspace");
+    if (!cls) return nil;
+
+    @try {
+        cached = [cls performSelector:@selector(defaultWorkspace)];
+    } @catch (NSException *e) {
+        cached = nil;
+    }
+    return cached;
+}
+
+// 注销所有"指向已不存在 App"的记录（灰图标/残留图标就是这么清的）
+static int wvfPurgeMissingApps(void)
+{
+    id ws = wvfLSWorkspace();
+    if (!ws) return -1;
+
+    int removed = 0;
+    @try {
+        NSArray *all = nil;
+        SEL selAll = NSSelectorFromString(@"allApplications");
+        if ([ws respondsToSelector:selAll]) {
+            all = [ws performSelector:selAll];
+        }
+        for (id proxy in all) {
+            NSURL *url = [proxy valueForKey:@"bundleURL"];
+            if (!url) continue;
+            NSString *path = url.path;
+            if (!path.length) continue;
+            if ([[NSFileManager defaultManager] fileExistsAtPath:path]) continue;
+
+            SEL unreg = NSSelectorFromString(@"unregisterApplication:");
+            if ([ws respondsToSelector:unreg]) {
+                [ws performSelector:unreg withObject:url];
+                removed++;
+            }
+        }
+    } @catch (NSException *e) {
+    }
+    return removed;
+}
+
+// 调用私有重建方法；返回是否成功
+static BOOL wvfRebuildLSDatabase(void)
+{
+    id ws = wvfLSWorkspace();
+    if (!ws) return NO;
+
+    SEL sel = NSSelectorFromString(@"_LSPrivateRebuildApplicationDatabasesForSystemApps:internal:user:");
+    if (![ws respondsToSelector:sel]) return NO;
+
+    @try {
+        NSMethodSignature *sig = [ws methodSignatureForSelector:sel];
+        if (!sig) return NO;
+        NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+        [inv setTarget:ws];
+        [inv setSelector:sel];
+        BOOL yes = YES;
+        [inv setArgument:&yes atIndex:2];
+        [inv setArgument:&yes atIndex:3];
+        [inv setArgument:&yes atIndex:4];
+        [inv invoke];
+    } @catch (NSException *e) {
+        return NO;
+    }
+    return YES;
+}
+
 // 让系统重新登记某个 App bundle（刷新 lsd 里存的版本等信息）
 static BOOL wvfLSRegisterURL(NSString *path)
 {
-    void *h = dlopen("/System/Library/Frameworks/MobileCoreServices.framework/MobileCoreServices", RTLD_LAZY);
-    if (!h) h = dlopen("/System/Library/Frameworks/CoreServices.framework/CoreServices", RTLD_LAZY);
-    if (!h) return NO;
+    wvfLSWorkspace();   // 确保 CoreServicesStore 已加载
 
     typedef Boolean (*RegFn)(CFURLRef, Boolean);
-    RegFn fn = (RegFn)dlsym(h, "LSRegisterURL");
+    RegFn fn = (RegFn)dlsym(RTLD_DEFAULT, "LSRegisterURL");
     if (!fn) return NO;
 
     CFURLRef url = (__bridge CFURLRef)[NSURL fileURLWithPath:path];
@@ -411,6 +500,7 @@ static NSString *wvfHandle(NSString *line)
         return has ? @"OK 已刷新（缓存重算中）" : @"OK 已刷新（未重启桌面）";
     }
     if ([line isEqualToString:@"REBUILD"]) {
+        int purgeCount = wvfPurgeMissingApps();
         BOOL hadCache = [[NSFileManager defaultManager]
                          fileExistsAtPath:@"/var/containers/Shared/SystemGroup/systemgroup.com.apple.lsd.iconscache/Library/Caches/com.apple.IconsCache"];
         wvfRebuildIconCache();
@@ -418,9 +508,10 @@ static NSString *wvfHandle(NSString *line)
         sleep(4);
         BOOL hasCache = [[NSFileManager defaultManager]
                          fileExistsAtPath:@"/var/containers/Shared/SystemGroup/systemgroup.com.apple.lsd.iconscache/Library/Caches/com.apple.IconsCache"];
-        if (hasCache) return @"OK 缓存已重建";
-        if (hadCache) return @"OK 仅重启桌面";
-        return @"OK 已清缓存，桌面重启中";
+        NSString *extra = [NSString stringWithFormat:@"（清理残留 %d 项）", purgeCount];
+        if (hasCache) return [NSString stringWithFormat:@"OK 缓存已重建%@", extra];
+        if (hadCache) return [NSString stringWithFormat:@"OK 仅重启桌面%@", extra];
+        return [NSString stringWithFormat:@"OK 已清缓存，桌面重启中%@", extra];
     }
     if ([line hasPrefix:@"LSREGISTER "]) {
         NSString *path = [line substringFromIndex:11];
