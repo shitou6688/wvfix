@@ -706,6 +706,7 @@ static NSString *wvfSafeWorkDir(void)
     self.view.userInteractionEnabled = NO;
     [self setResult:@"正在重建图标缓存，5 秒后黑屏…" color:CLR_ORANGE];
     [self log:@"[i] 即将重建图标缓存，桌面会黑屏一下并自动回来"];
+
     dispatch_async(self.workQueue, ^{
         for (int i = 5; i >= 1; i--) {
             [self log:@"[i] 倒计时 %d 秒…", i];
@@ -714,34 +715,52 @@ static NSString *wvfSafeWorkDir(void)
             sleep(1);
         }
 
-        NSString *h = [self trollStoreHelperPath];
-        if (!h) {
-        NSString *dr = wvfDaemonCall(@"UICACHE");
-        if (dr) {
-            [self log:@"[i] 重建图标缓存（守护进程）：%@", dr];
-        }
-        if (geteuid() == 0) {
-            NSString *uc = @"/usr/bin/uicache";
-            if ([[NSFileManager defaultManager] fileExistsAtPath:uc]) {
-                int e2 = 0;
-                int r2 = spawnRootFull(uc, @[@"-a"], WVF_PERSONA_FLAGS_OVERRIDE, nil, &e2);
-                [self log:@"[i] uicache -a：rc=%d spawnErr=%d", r2, e2];
-            }
-        }
-            [self log:@"[!] 没找到 trollstorehelper"];
-            [self setResult:@"✗ 没找到 trollstorehelper，请在 TrollStore 里手动重建" color:CLR_RED];
+        BOOL ok = NO;
+
+        // ① 首选：内置守护进程自己重建（不依赖 TrollStore / uicache）
+        NSString *dr = wvfDaemonCall(@"REBUILD");
+        if (dr && [dr hasPrefix:@"OK"]) {
+            [self log:@"[i] 重建图标缓存：守护进程已完成（删缓存 → 重建 LS 数据库 → 重启桌面）"];
+            ok = YES;
+        } else if (dr) {
+            [self log:@"[!] 守护进程重建返回：%@", dr];
         } else {
-            [self log:@"[i] 执行 refresh-all（删 IconsCache → 重建 LS 数据库 → 重新登记）"];
-            int err = 0;
-            int rc = spawnRootFull(h, @[@"refresh-all"], WVF_PERSONA_FLAGS_OVERRIDE, nil, &err);
-            [self log:@"[i] refresh-all：rc=%d spawnErr=%d", rc, err];
-            if (rc == 0) {
-                [self setResult:@"✓ 重建完成 · 黑屏后从后台进入微信登录" color:CLR_GREEN];
-            } else {
-                [self setResult:@"✗ 重建失败，点右上角「日志」查看原因" color:CLR_RED];
+            [self log:@"[!] 守护进程未运行"];
+        }
+
+        // ② 其次：TrollStore 的 trollstorehelper（装了才用）
+        if (!ok) {
+            NSString *h = [self trollStoreHelperPath];
+            if (h) {
+                int err = 0;
+                int rc = spawnRootFull(h, @[@"refresh-all"], WVF_PERSONA_FLAGS_OVERRIDE, nil, &err);
+                [self log:@"[i] trollstorehelper refresh-all：rc=%d spawnErr=%d", rc, err];
+                ok = (rc == 0);
             }
+        }
+
+        // ③ 再次：root 或越狱自带的 uicache
+        if (!ok) {
+            if (geteuid() == 0) {
+                wvfKillByName("backboardd");
+                ok = YES;
+                [self log:@"[i] 已直接重启 backboardd"];
+            } else {
+                NSString *dr2 = wvfDaemonCall(@"UICACHE");
+                if (dr2 && [dr2 hasPrefix:@"OK"]) {
+                    [self log:@"[i] uicache 已完成"];
+                    ok = YES;
+                }
+            }
+        }
+
+        if (ok) {
+            [self setResult:@"✓ 重建完成 · 黑屏后从后台进入微信登录" color:CLR_GREEN];
+        } else {
+            [self setResult:@"✗ 重建失败，请点右上角「日志」查看原因" color:CLR_RED];
         }
         [self log:@"[i] 黑屏结束后，从后台进入微信登录即可"];
+
         dispatch_async(dispatch_get_main_queue(), ^{
             self.view.userInteractionEnabled = YES;
         });

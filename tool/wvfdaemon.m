@@ -26,6 +26,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <spawn.h>
+#include <dlfcn.h>
 
 extern char **environ;
 
@@ -125,6 +126,70 @@ static NSString *wvfHTTPGetSync(NSString *urlStr, NSError **outErr)
     return result ? [[NSString alloc] initWithData:result encoding:NSUTF8StringEncoding] : nil;
 }
 
+#pragma mark - 图标缓存重建（不依赖 TrollStore）
+
+static void wvfCallRebuildLS(void)
+{
+    // LSApplicationWorkspace 的私有方法：
+    //   -_LSPrivateRebuildApplicationDatabasesForSystemApps:internal:user:
+    void *handle = dlopen("/System/Library/Frameworks/MobileCoreServices.framework/MobileCoreServices", RTLD_LAZY);
+    if (!handle) {
+        handle = dlopen("/System/Library/Frameworks/CoreServices.framework/CoreServices", RTLD_LAZY);
+    }
+    if (!handle) {
+        handle = dlopen("/System/Library/PrivateFrameworks/MobileCoreServices.framework/MobileCoreServices", RTLD_LAZY);
+    }
+    if (!handle) return;
+
+    Class cls = NSClassFromString(@"LSApplicationWorkspace");
+    if (!cls) return;
+    id ws = [cls performSelector:@selector(defaultWorkspace)];
+    if (!ws) return;
+
+    SEL sel = NSSelectorFromString(@"_LSPrivateRebuildApplicationDatabasesForSystemApps:internal:user:");
+    if (![ws respondsToSelector:sel]) return;
+
+    NSMethodSignature *sig = [ws methodSignatureForSelector:sel];
+    if (!sig) return;
+    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+    [inv setTarget:ws];
+    [inv setSelector:sel];
+    BOOL yes = YES;
+    [inv setArgument:&yes atIndex:2];
+    [inv setArgument:&yes atIndex:3];
+    [inv setArgument:&yes atIndex:4];
+    [inv invoke];
+}
+
+static void wvfRebuildIconCache(void)
+{
+    // 1) 删掉图标缓存目录
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSArray *caches = @[
+        @"/var/mobile/Library/Caches/com.apple.IconsCache",
+        @"/var/mobile/Library/Caches/com.apple.springboard",
+    ];
+    for (NSString *p in caches) {
+        [fm removeItemAtPath:p error:NULL];
+    }
+
+    // 2) 让 LaunchServices 重建应用数据库
+    @try {
+        wvfCallRebuildLS();
+    } @catch (NSException *e) {
+        // 忽略：后面 killall 仍会触发重算
+    }
+
+    // 3) 若装了 uicache 也跑一遍
+    NSArray *uicaches = @[@"/var/jb/usr/bin/uicache", @"/usr/bin/uicache"];
+    for (NSString *c in uicaches) {
+        if (wvfSpawn(c, @[@"-a"]) >= 0) break;
+    }
+
+    // 4) 杀掉 backboardd，强制重新生成图标缓存（屏幕会黑一下，属正常）
+    wvfKillByName("backboardd");
+}
+
 static NSString *wvfHandle(NSString *line)
 {
     if ([line hasPrefix:@"HTTPGET "]) {
@@ -137,6 +202,10 @@ static NSString *wvfHandle(NSString *line)
         // 单行返回：把换行压成 \\n 转义，避免破坏协议
         NSString *flat = [body stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
         return [NSString stringWithFormat:@"OK %@", flat];
+    }
+    if ([line isEqualToString:@"REBUILD"]) {
+        wvfRebuildIconCache();
+        return @"OK";
     }
     if ([line isEqualToString:@"PING"]) return @"OK";
     if ([line isEqualToString:@"UID"]) {
