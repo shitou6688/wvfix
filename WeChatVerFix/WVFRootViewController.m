@@ -20,6 +20,7 @@
 #import <sys/wait.h>
 #import <sys/stat.h>
 #import "WVFLicense.h"
+#import "WVFCrash.h"
 
 extern char **environ;
 
@@ -638,7 +639,11 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 - (void)checkLicenseOnLaunch {
     WVFLicense *lic = [WVFLicense shared];
     if (![lic activated]) {
-        [self showGate:@"请输入卡密激活后使用"];
+        @try {
+            [self showGate:@"请输入卡密激活后使用"];
+        } @catch (NSException *e) {
+            [self log:@"[crash] showGate: %@", e.reason];
+        }
         return;
     }
     [self updateLicenseIdle];
@@ -763,6 +768,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 }
 
 - (void)onActivatePressed {
+    @try {
     NSString *k = [self.gateField.text stringByTrimmingCharactersInSet:
                    [NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (!k.length) {
@@ -787,6 +793,11 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
             }
         });
     }];
+    } @catch (NSException *e) {
+        [self log:@"[crash] 激活异常: %@", e.reason];
+        self.gateStatus.textColor = CLR_RED;
+        self.gateStatus.text = @"激活时出错，请把「日志」内容发给客服";
+    }
 }
 
 
@@ -958,6 +969,17 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    WVFCrashInstall();
+    {
+        NSString *prev = WVFCrashReadLast();
+        if (prev.length) {
+            [self log:@"[crash] 上次崩溃记录："];
+            for (NSString *line in [prev componentsSeparatedByString:@"\n"]) {
+                if (line.length) [self log:@"[crash] %@", line];
+            }
+            WVFCrashClear();
+        }
+    }
     if (!self.workQueue) {
         self.workQueue = dispatch_queue_create("com.local.wvfix.patch", DISPATCH_QUEUE_SERIAL);
     }
@@ -1221,6 +1243,16 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 }
 
 - (void)refresh {
+    {
+        size_t size = 0;
+        sysctlbyname("hw.machine", NULL, &size, NULL, 0);
+        char machine[64] = {0};
+        if (size > 0 && size < sizeof(machine)) {
+            sysctlbyname("hw.machine", machine, &size, NULL, 0);
+        }
+        [self log:@"[i] 设备：%s  iOS %@", machine, [[UIDevice currentDevice] systemVersion]];
+        [self log:@"[i] App 版本：%@", [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"]];
+    }
     self.appPath = [self findWeChatApp];
     if (!self.appPath) {
         self.statusLabel.text = @"没找到微信";
