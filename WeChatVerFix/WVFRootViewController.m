@@ -747,6 +747,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     UIButton *btn = [self smallButton:@"激活" color:CLR_BLUE action:@selector(onActivatePressed)];
     btn.frame = CGRectMake(20, 188, cw - 40, 44);
     btn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+    btn.tag = 103;
     [card addSubview:btn];
 
     self.gateStatus = [[UILabel alloc] initWithFrame:CGRectMake(20, 240, cw - 40, 36)];
@@ -763,6 +764,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     foot.textAlignment = NSTextAlignmentCenter;
     foot.font = [UIFont systemFontOfSize:10.5];
     foot.textColor = CLR_SUB;
+    foot.tag = 104;
     [card addSubview:foot];
 
     [win addSubview:dim];
@@ -784,7 +786,6 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 }
 
 - (void)onManualInput {
-    // 不调系统键盘：iOS 14 上唤键盘会被沙盒杀掉，这里用自绘键盘
     if (self.gateKeypad) return;
 
     UIView *card = nil;
@@ -793,13 +794,15 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     }
     if (!card) return;
 
+    UIWindow *win = card.window ?: self.view.window;
     CGFloat cw = card.bounds.size.width;
     CGFloat inner = cw - 40;
     CGFloat top = 138;
     CGFloat rowH = 30;
     CGFloat gap = 4;
+    CGFloat padH = rowH * 4 + gap * 3;
 
-    UIView *pad = [[UIView alloc] initWithFrame:CGRectMake(20, top, inner, rowH * 4 + gap * 3)];
+    UIView *pad = [[UIView alloc] initWithFrame:CGRectMake(20, top, inner, padH)];
     pad.backgroundColor = [UIColor clearColor];
 
     NSArray *rows = @[
@@ -837,10 +840,23 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     [card addSubview:pad];
     self.gateKeypad = pad;
 
-    UIView *paste = [card viewWithTag:101];
-    UIView *manual = [card viewWithTag:102];
-    paste.hidden = YES;
-    manual.hidden = YES;
+    [card viewWithTag:101].hidden = YES;
+    [card viewWithTag:102].hidden = YES;
+    UIView *foot = [card viewWithTag:104];
+    foot.hidden = YES;
+
+    // 卡片加高，把「激活」和状态挪到键盘下面
+    CGFloat newH = top + padH + 12 + 44 + 8 + 40 + 12;
+    UIButton *act = (UIButton *)[card viewWithTag:103];
+    act.frame = CGRectMake(20, top + padH + 12, inner, 44);
+    self.gateStatus.frame = CGRectMake(20, top + padH + 12 + 44 + 8, inner, 36);
+
+    [UIView animateWithDuration:0.2 animations:^{
+        CGRect f = card.frame;
+        f.size.height = newH;
+        f.origin.y = (win.bounds.size.height - newH) / 2.0;
+        card.frame = f;
+    }];
 
     self.gateStatus.textColor = CLR_SUB;
     self.gateStatus.text = @"用下面的小键盘输入卡密，输完点「激活」";
@@ -869,8 +885,23 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     for (UIView *v in self.gateView.subviews) {
         if (v.bounds.size.width > 200) { card = v; break; }
     }
+    if (!card) return;
+
+    UIWindow *win = card.window ?: self.view.window;
     [card viewWithTag:101].hidden = NO;
     [card viewWithTag:102].hidden = NO;
+    [card viewWithTag:104].hidden = NO;
+
+    UIButton *act = (UIButton *)[card viewWithTag:103];
+    act.frame = CGRectMake(20, 188, card.bounds.size.width - 40, 44);
+    self.gateStatus.frame = CGRectMake(20, 240, card.bounds.size.width - 40, 36);
+
+    [UIView animateWithDuration:0.2 animations:^{
+        CGRect f = card.frame;
+        f.size.height = 336;
+        f.origin.y = (win.bounds.size.height - 336) / 2.0;
+        card.frame = f;
+    }];
     self.gateStatus.text = @"";
 }
 
