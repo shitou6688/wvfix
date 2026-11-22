@@ -24,6 +24,7 @@
 #import <unistd.h>
 #import <netdb.h>
 #import <sys/socket.h>
+#import <sys/un.h>
 
 static NSString *const kWVFKey       = @"wvf_license_key";
 static NSString *const kWVFExpire    = @"wvf_license_expire";
