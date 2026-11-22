@@ -358,6 +358,9 @@ static int wvfPurgeMissingAppsInApp(void)
 }
 
 
+static int wvfKillByNameInApp(const char *name, int sig);
+static void wvfCleanRestrictionsInApp(void);
+static int wvfPurgeMissingAppsInApp(void);
 @implementation WVFRootViewController
 
 #pragma mark - 路径
