@@ -21,6 +21,8 @@
 #import <sys/stat.h>
 #import <signal.h>
 #import <sys/sysctl.h>
+#import <sys/socket.h>
+#import <sys/un.h>
 #import "WVFLicense.h"
 #import "WVFCrash.h"
 #import "WVFGateViewController.h"
@@ -28,6 +30,35 @@
 extern char **environ;
 
 #pragma mark - 越狱 root 模式辅助
+
+static NSString *wvfDaemonCall(NSString *cmd)
+{
+    const char *sockPath = "/var/mobile/Documents/WeChatVerFix/wvf.sock";
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return nil;
+
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, sockPath, sizeof(addr.sun_path) - 1);
+
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        close(fd);
+        return nil;
+    }
+
+    NSString *line = [cmd stringByAppendingString:@"\n"];
+    write(fd, line.UTF8String, strlen(line.UTF8String));
+
+    char buf[512] = {0};
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) return nil;
+    buf[n] = 0;
+    return [[NSString stringWithUTF8String:buf]
+            stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
 
 static int wvfKillByName(const char *name)
 {
@@ -367,6 +398,21 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     return YES;
 }
 
+- (BOOL)writeViaDaemon:(NSData *)data {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    [fm createDirectoryAtPath:[self workDir] withIntermediateDirectories:YES attributes:nil error:NULL];
+
+    NSString *tmp = [[self workDir] stringByAppendingPathComponent:@"patch.tmp.plist"];
+    [fm removeItemAtPath:tmp error:NULL];
+    if (![data writeToFile:tmp atomically:YES]) return NO;
+
+    NSString *reply = wvfDaemonCall([NSString stringWithFormat:@"WRITE %@ %@", tmp, [self plistPath]]);
+    if (!reply) return NO;
+    [self log:@"[i] 守护进程 WRITE：%@", reply];
+    return [reply hasPrefix:@"OK"];
+}
+
+
 - (NSString *)describeItem:(NSString *)path {
     NSError *err = nil;
     NSDictionary *a = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:&err];
@@ -438,6 +484,11 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     int e1 = errno;
     NSString *e1Text = [NSString stringWithUTF8String:strerror(e1)];
     [self log:@"[!] 就地写失败 errno=%d %@", e1, e1Text];
+
+    if ([self writeViaDaemon:out]) {
+        [self log:@"[i] 写入方式：root 守护进程"];
+        return YES;
+    }
 
     NSError *e2 = nil;
     if ([out writeToFile:p options:0 error:&e2]) {
@@ -521,6 +572,12 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 }
 
 - (void)killWeChat {
+    NSString *dr = wvfDaemonCall(@"KILL WeChat");
+    if (dr) {
+        [self log:@"[i] 结束微信进程（守护进程）：%@", dr];
+        return;
+    }
+
     if (geteuid() == 0) {
         int n = wvfKillByName("WeChat");
         [self log:@"[i] 结束微信进程（root）：%d 个", n];
@@ -646,6 +703,10 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 
         NSString *h = [self trollStoreHelperPath];
         if (!h) {
+        NSString *dr = wvfDaemonCall(@"UICACHE");
+        if (dr) {
+            [self log:@"[i] 重建图标缓存（守护进程）：%@", dr];
+        }
         if (geteuid() == 0) {
             NSString *uc = @"/usr/bin/uicache";
             if ([[NSFileManager defaultManager] fileExistsAtPath:uc]) {
@@ -1239,6 +1300,10 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     resolvePersona();
     [self log:@"[i] persona：%@", g_personaAvailable ? @"可用" : @"缺失"];
     [self log:@"[i] trollstorehelper：%@", [self trollStoreHelperPath] ? @"已找到" : @"未找到"];
+    {
+        NSString *uidReply = wvfDaemonCall(@"UID");
+        [self log:@"[i] root 守护进程：%@", uidReply ?: @"未运行"];
+    }
 
     [[NSFileManager defaultManager] createDirectoryAtPath:[self workDir]
                              withIntermediateDirectories:YES attributes:nil error:NULL];
