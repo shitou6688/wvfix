@@ -9,6 +9,7 @@
 
 import SwiftUI
 
+@available(iOS 13.0, *)
 struct GateView: View {
     var initialMessage: String
     var onSuccess: () -> Void
@@ -135,6 +136,7 @@ struct GateView: View {
 }
 
 /// 供 Objective-C 调用的入口
+@available(iOS 13.0, *)
 @objc class WVFGateHost: NSObject {
     @objc static func makeViewController(_ message: String,
                                         onSuccess: @escaping @convention(block) () -> Void) -> UIViewController {

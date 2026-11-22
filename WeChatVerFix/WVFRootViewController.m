@@ -785,14 +785,31 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     }
 
     __weak typeof(self) weakSelf = self;
-    UIViewController *host = [WVFGateHost makeViewController:message ?: @""
-                                                   onSuccess:^{
+    void (^onDone)(void) = ^{
         [weakSelf hideGate];
         [weakSelf updateLicenseIdle];
         [weakSelf setResult:@"✓ 激活成功" color:CLR_GREEN];
-    }];
+    };
 
+    UIViewController *host = nil;
+
+    if (@available(iOS 13.0, *)) {
+        // iOS 13+：SwiftUI 弹窗（与 TrollInstallerX 一致，iOS 14 上更稳）
+        host = [WVFGateHost makeViewController:message ?: @"" onSuccess:onDone];
+    } else {
+        // iOS 12 及以下：回退 UIKit 弹窗
+        WVFGateViewController *vc = [[WVFGateViewController alloc] init];
+        vc.initialMessage = message;
+        vc.onFinish = onDone;
+        host = vc;
+    }
+
+    if (!host) return;
+
+    host.modalPresentationStyle = UIModalPresentationOverFullScreen;
+    host.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
     self.gateVC = (WVFGateViewController *)host;
+
     @try {
         [self presentViewController:host animated:YES completion:nil];
     } @catch (NSException *e) {
