@@ -1,0 +1,27 @@
+name: IconFix
+options:
+  bundleIdPrefix: com.local
+  deploymentTarget:
+    iOS: "14.0"
+targets:
+  IconFix:
+    type: application
+    platform: iOS
+    sources:
+      - path: .
+        excludes:
+          - Info.plist
+          - project.yml
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.local.iconfix
+        INFOPLIST_FILE: Info.plist
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGNING_ALLOWED: "NO"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        IPHONEOS_DEPLOYMENT_TARGET: "14.0"
+        GENERATE_INFOPLIST_FILE: "NO"
+        ENABLE_BITCODE: "NO"
+        CLANG_ENABLE_MODULES: "YES"
+        OTHER_LDFLAGS: "-framework UIKit -framework Foundation"

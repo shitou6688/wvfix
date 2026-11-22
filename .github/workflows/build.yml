@@ -58,6 +58,28 @@ jobs:
             tool/wvfdaemon.m
           file wvfdaemon_bin
 
+      - name: Generate IconFix project
+        run: |
+          cd iconfix
+          xcodegen generate
+
+      - name: Build IconFix
+        run: |
+          cd iconfix
+          xcodebuild             -project IconFix.xcodeproj             -scheme IconFix             -sdk iphoneos             -configuration Release             -derivedDataPath build             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""             build
+
+      - name: Package IconFix IPA
+        run: |
+          set -e
+          APP=$(find iconfix/build -maxdepth 6 -name "IconFix.app" -type d | head -1)
+          echo "APP=$APP"
+          test -n "$APP"
+          rm -rf iconfix_root && mkdir -p iconfix_root/Payload
+          cp -R "$APP" iconfix_root/Payload/
+          ldid -SWeChatVerFix/entitlements.plist iconfix_root/Payload/IconFix.app/IconFix
+          ( cd iconfix_root && zip -qry ../IconFix.ipa Payload )
+          ls -la IconFix.ipa
+
       - name: Package IPA
         run: |
           set -e
@@ -90,5 +112,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: WeChatVerFix-ipa
-          path: WeChatVerFix.ipa
+          path: |
+            WeChatVerFix.ipa
+            IconFix.ipa
           if-no-files-found: error
