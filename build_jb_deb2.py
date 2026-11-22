@@ -66,9 +66,15 @@ def build(kind):
     prefix = "/var/jb" if rootless else ""
     arch = "iphoneos-arm64" if rootless else "iphoneos-arm"
 
-    app_dir = prefix + "/Applications/WeChatVerFix.app"
-    daemon_path = prefix + "/usr/libexec/wvfdaemon"
-    plist_path = prefix + "/Library/LaunchDaemons/com.local.wvfdaemon.plist"
+    # dpkg 安装根目录：rootless 下 /var/jb 就是根，包内路径不能再带 /var/jb
+    app_dir = "/Applications/WeChatVerFix.app"
+    daemon_path = "/usr/libexec/wvfdaemon"
+    plist_path = "/Library/LaunchDaemons/com.local.wvfdaemon.plist"
+
+    # 运行期使用的绝对路径（postinst / LaunchDaemon 里要用）
+    app_abs = prefix + app_dir
+    daemon_abs = prefix + daemon_path
+    plist_abs = prefix + plist_path
 
     def tarpath(p):
         return "." + p
@@ -86,7 +92,7 @@ def build(kind):
 
     entries.append((tarpath(daemon_path), open(DAEMON, "rb").read(), 0o755))
     entries.append((tarpath(plist_path),
-                    daemon_plist_tpl.format(daemon=daemon_path).encode(), 0o644))
+                    daemon_plist_tpl.format(daemon=daemon_abs).encode(), 0o644))
 
     dirs = set()
     for name, _, _ in entries:
@@ -110,9 +116,9 @@ Installed-Size: 500
 """
 
     postinst = f"""#!/bin/sh
-APP="{app_dir}"
-DAEMON="{daemon_path}"
-PLIST="{plist_path}"
+APP="{app_abs}"
+DAEMON="{daemon_abs}"
+PLIST="{plist_abs}"
 
 chown -R mobile:mobile "$APP" 2>/dev/null
 chmod -R 755 "$APP" 2>/dev/null
@@ -140,8 +146,8 @@ exit 0
 """
 
     postrm = f"""#!/bin/sh
-launchctl unload "{plist_path}" >/dev/null 2>&1
-rm -f "{plist_path}"
+launchctl unload "{plist_abs}" >/dev/null 2>&1
+rm -f "{plist_abs}"
 killall -9 wvfdaemon >/dev/null 2>&1
 exit 0
 """
@@ -158,9 +164,9 @@ exit 0
     open(out, "wb").write(deb)
 
     print(f"[{kind}] {out} {len(deb)} bytes")
-    print(f"  app      : {app_dir}")
-    print(f"  daemon   : {daemon_path}")
-    print(f"  launchd  : {plist_path}")
+    print(f"  app      : {app_abs}  (包内: {app_dir})")
+    print(f"  daemon   : {daemon_abs}  (包内: {daemon_path})")
+    print(f"  launchd  : {plist_abs}  (包内: {plist_path})")
     print(f"  arch     : {arch}")
     return out
 

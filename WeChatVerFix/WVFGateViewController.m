@@ -105,6 +105,11 @@
     foot.textColor = G_CLR_SUB;
     [card addSubview:foot];
 
+    // 长按「激活」按钮 → 网络诊断（把服务器返回原文显示出来）
+    self.activateButton.userInteractionEnabled = YES;
+    [self.activateButton addGestureRecognizer:
+        [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(onDiagnose)]];
+
     UITapGestureRecognizer *tap =
         [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onTapBlank)];
     tap.cancelsTouchesInView = NO;
@@ -131,6 +136,24 @@
         self.statusLabel.textColor = isError ? G_CLR_RED : G_CLR_SUB;
         self.statusLabel.text = text ?: @"";
     });
+}
+
+- (void)onDiagnose {
+    [self setStatusText:@"正在诊断服务器…" isError:NO];
+
+    __weak typeof(self) weakSelf = self;
+    [[WVFLicense shared] diagnoseWithCompletion:^(NSString *text) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            UIAlertController *ac = [UIAlertController
+                alertControllerWithTitle:@"服务器诊断"
+                                 message:text
+                          preferredStyle:UIAlertControllerStyleAlert];
+            [ac addAction:[UIAlertAction actionWithTitle:@"好"
+                                                   style:UIAlertActionStyleDefault handler:nil]];
+            [weakSelf presentViewController:ac animated:YES completion:nil];
+            [weakSelf setStatusText:@"诊断完成" isError:NO];
+        });
+    }];
 }
 
 - (void)onPaste {

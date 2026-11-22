@@ -226,6 +226,32 @@ typedef CFTypeRef (*MGCopyAnswerFn)(CFStringRef);
     }
 }
 
+- (void)diagnoseWithCompletion:(void (^)(NSString *text))completion
+{
+    NSString *base = [self serverURL];
+    if (!base.length) { completion(@"未配置服务器地址"); return; }
+
+    NSURL *url = [NSURL URLWithString:[base stringByAppendingString:@"?diag=1"]];
+    if (!url) { completion(@"服务器地址无效"); return; }
+
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
+    req.timeoutInterval = 12;
+
+    [[[NSURLSession sharedSession] dataTaskWithRequest:req
+        completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
+        if (err) {
+            completion([NSString stringWithFormat:@"失败：%@ (code %ld)\n%@",
+                        err.localizedDescription, (long)err.code, base]);
+            return;
+        }
+        NSHTTPURLResponse *hr = (NSHTTPURLResponse *)resp;
+        NSString *body = data.length ? [[NSString alloc] initWithData:data
+                                                             encoding:NSUTF8StringEncoding] : @"";
+        if (body.length > 260) body = [body substringToIndex:260];
+        completion([NSString stringWithFormat:@"HTTP %ld\n%@", (long)hr.statusCode, body ?: @""]);
+    }] resume];
+}
+
 - (void)callKami:(NSString *)kami
           action:(NSString *)action
       completion:(void (^)(NSInteger code, NSDictionary *msg, long long vip, NSString *err))completion {
@@ -263,7 +289,8 @@ typedef CFTypeRef (*MGCopyAnswerFn)(CFStringRef);
     [[[NSURLSession sharedSession] dataTaskWithRequest:req
                                      completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
         if (err) {
-            completion(-1, nil, 0, @"网络错误，请检查网络后重试");
+            completion(-1, nil, 0, [NSString stringWithFormat:@"网络错误(%ld) %@",
+                        (long)err.code, err.localizedDescription ?: @""]);
             return;
         }
         NSDictionary *json = nil;
