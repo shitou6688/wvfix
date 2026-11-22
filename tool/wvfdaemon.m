@@ -30,6 +30,12 @@
 
 extern char **environ;
 
+static void wvfCleanRestrictions(void);
+static BOOL wvfShouldRegisterAsUser(void);
+static void wvfRefreshAppRegistrations(void);
+static BOOL wvfLSRegisterURL(NSString *path);
+
+
 static const char *kSockDir  = "/var/mobile/Documents/WeChatVerFix";
 static const char *kSockPath = "/var/mobile/Documents/WeChatVerFix/wvf.sock";
 
