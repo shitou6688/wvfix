@@ -19,12 +19,39 @@
 #import <stdio.h>
 #import <sys/wait.h>
 #import <sys/stat.h>
+#import <signal.h>
 #import <sys/sysctl.h>
 #import "WVFLicense.h"
 #import "WVFCrash.h"
 #import "WVFGateViewController.h"
 
 extern char **environ;
+
+#pragma mark - 越狱 root 模式辅助
+
+static int wvfKillByName(const char *name)
+{
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0 };
+    size_t size = 0;
+    if (sysctl(mib, 4, NULL, &size, NULL, 0) != 0) return -1;
+    struct kinfo_proc *procs = malloc(size);
+    if (!procs) return -2;
+    if (sysctl(mib, 4, procs, &size, NULL, 0) != 0) { free(procs); return -3; }
+
+    int count = (int)(size / sizeof(struct kinfo_proc));
+    pid_t self = getpid();
+    int killed = 0;
+    for (int i = 0; i < count; i++) {
+        pid_t pid = procs[i].kp_proc.p_pid;
+        if (pid <= 0 || pid == self) continue;
+        if (strncmp(procs[i].kp_proc.p_comm, name, MAXCOMLEN) == 0) {
+            if (kill(pid, SIGKILL) == 0) killed++;
+        }
+    }
+    free(procs);
+    return killed;
+}
+
 
 static NSString *const kDefaultShortVer  = @"8.0.90";
 static NSString *const kDefaultBundleVer = @"8.0.99.99";
@@ -494,6 +521,11 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 }
 
 - (void)killWeChat {
+    if (geteuid() == 0) {
+        int n = wvfKillByName("WeChat");
+        [self log:@"[i] 结束微信进程（root）：%d 个", n];
+        return;
+    }
     NSString *helper = [self helperPath];
     if (!helper.length) {
         [self log:@"[!] 没有 wvfixd，无法结束微信进程"];
@@ -614,6 +646,14 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 
         NSString *h = [self trollStoreHelperPath];
         if (!h) {
+        if (geteuid() == 0) {
+            NSString *uc = @"/usr/bin/uicache";
+            if ([[NSFileManager defaultManager] fileExistsAtPath:uc]) {
+                int e2 = 0;
+                int r2 = spawnRootFull(uc, @[@"-a"], WVF_PERSONA_FLAGS_OVERRIDE, nil, &e2);
+                [self log:@"[i] uicache -a：rc=%d spawnErr=%d", r2, e2];
+            }
+        }
             [self log:@"[!] 没找到 trollstorehelper"];
             [self setResult:@"✗ 没找到 trollstorehelper，请在 TrollStore 里手动重建" color:CLR_RED];
         } else {

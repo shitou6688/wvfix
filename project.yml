@@ -2,7 +2,7 @@ name: WeChatVerFix
 options:
   bundleIdPrefix: com.local
   deploymentTarget:
-    iOS: "14.0"
+    iOS: "11.0"
   createIntermediateGroups: true
 targets:
   WeChatVerFix:
@@ -22,7 +22,7 @@ targets:
         CODE_SIGNING_ALLOWED: "NO"
         EXPANDED_CODE_SIGN_IDENTITY: ""
         TARGETED_DEVICE_FAMILY: "1,2"
-        IPHONEOS_DEPLOYMENT_TARGET: "14.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "11.0"
         GENERATE_INFOPLIST_FILE: "NO"
         ENABLE_BITCODE: "NO"
         CLANG_ENABLE_MODULES: "YES"
