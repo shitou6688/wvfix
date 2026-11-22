@@ -161,35 +161,82 @@ static void wvfCallRebuildLS(void)
     [inv invoke];
 }
 
-static void wvfRefreshOnly(void)
+static void wvfKillByNameSignal(const char *name, int sig)
 {
-    // 删缓存 + 重建 LaunchServices 数据库 + uicache，但不动 backboardd
-    NSFileManager *fm = [NSFileManager defaultManager];
-    NSArray *caches = @[
-        @"/var/mobile/Library/Caches/com.apple.IconsCache",
-        @"/var/mobile/Library/Caches/com.apple.springboard",
-    ];
-    for (NSString *p in caches) {
-        [fm removeItemAtPath:p error:NULL];
-    }
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0 };
+    size_t size = 0;
+    if (sysctl(mib, 4, NULL, &size, NULL, 0) != 0) return;
+    struct kinfo_proc *procs = malloc(size);
+    if (!procs) return;
+    if (sysctl(mib, 4, procs, &size, NULL, 0) != 0) { free(procs); return; }
 
+    int count = (int)(size / sizeof(struct kinfo_proc));
+    for (int i = 0; i < count; i++) {
+        pid_t pid = procs[i].kp_proc.p_pid;
+        if (pid <= 0) continue;
+        if (strncmp(procs[i].kp_proc.p_comm, name, MAXCOMLEN) == 0) {
+            kill(pid, sig);
+        }
+    }
+    free(procs);
+}
+
+// 让 SpringBoard 重新加载桌面图标（不重启桌面）
+static void wvfReloadIconsViaSpringBoard(void)
+{
+    void *sb = dlopen("/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices", RTLD_LAZY);
+    if (!sb) return;
+    Class cls = NSClassFromString(@"SBSHomeScreenService");
+    if (!cls) return;
     @try {
-        wvfCallRebuildLS();
+        id svc = [[cls alloc] init];
+        SEL sel = NSSelectorFromString(@"reloadIcons");
+        if ([svc respondsToSelector:sel]) {
+            [svc performSelector:sel];
+        }
     } @catch (NSException *e) {
         // 忽略
     }
+}
 
+// 与 TrollStore 的 refresh-all 完全一致的清理：删图标缓存 + 重建 LS 数据库
+static void wvfCoreRefresh(void)
+{
+    // TrollStore 用的真实路径
+    NSString *iconsCache = @"/var/containers/Shared/SystemGroup/"
+                            "systemgroup.com.apple.lsd.iconscache/Library/Caches/com.apple.IconsCache";
+    [[NSFileManager defaultManager] removeItemAtPath:iconsCache error:NULL];
+
+    // 兼容旧路径（有些系统版本这里也有一份）
+    [[NSFileManager defaultManager] removeItemAtPath:@"/var/mobile/Library/Caches/com.apple.IconsCache"
+                                               error:NULL];
+
+    // 重建 LaunchServices 应用数据库（TrollStore 同款私有方法）
+    @try {
+        wvfCallRebuildLS();
+    } @catch (NSException *e) {
+    }
+
+    // 若有 uicache 再补一遍
     NSArray *uicaches = @[@"/var/jb/usr/bin/uicache", @"/usr/bin/uicache"];
     for (NSString *c in uicaches) {
         if (wvfSpawn(c, @[@"-a"]) >= 0) break;
     }
 }
 
+// 轻量：只刷新状态，不重启桌面、不杀后台
+static void wvfRefreshOnly(void)
+{
+    wvfCoreRefresh();
+    wvfReloadIconsViaSpringBoard();
+}
+
+// 完整：与 TrollStore refresh-all 等价（会重启桌面）
 static void wvfRebuildIconCache(void)
 {
-    wvfRefreshOnly();
-    // 强制重启桌面：屏幕黑一下，但会带走后台 App
-    wvfKillByName("backboardd");
+    wvfCoreRefresh();
+    // TrollStore 用 SIGTERM（softly=YES），不是 SIGKILL
+    wvfKillByNameSignal("backboardd", SIGTERM);
 }
 
 static NSString *wvfHandle(NSString *line)
@@ -210,17 +257,17 @@ static NSString *wvfHandle(NSString *line)
         wvfRefreshOnly();
         sleep(1);
         BOOL has = [[NSFileManager defaultManager]
-                    fileExistsAtPath:@"/var/mobile/Library/Caches/com.apple.IconsCache"];
+                    fileExistsAtPath:@"/var/containers/Shared/SystemGroup/systemgroup.com.apple.lsd.iconscache/Library/Caches/com.apple.IconsCache"];
         return has ? @"OK 已刷新（缓存重算中）" : @"OK 已刷新（未重启桌面）";
     }
     if ([line isEqualToString:@"REBUILD"]) {
         BOOL hadCache = [[NSFileManager defaultManager]
-                         fileExistsAtPath:@"/var/mobile/Library/Caches/com.apple.IconsCache"];
+                         fileExistsAtPath:@"/var/containers/Shared/SystemGroup/systemgroup.com.apple.lsd.iconscache/Library/Caches/com.apple.IconsCache"];
         wvfRebuildIconCache();
         // 等系统重建：IconsCache 会重新生成
         sleep(4);
         BOOL hasCache = [[NSFileManager defaultManager]
-                         fileExistsAtPath:@"/var/mobile/Library/Caches/com.apple.IconsCache"];
+                         fileExistsAtPath:@"/var/containers/Shared/SystemGroup/systemgroup.com.apple.lsd.iconscache/Library/Caches/com.apple.IconsCache"];
         if (hasCache) return @"OK 缓存已重建";
         if (hadCache) return @"OK 仅重启桌面";
         return @"OK 已清缓存，桌面重启中";
