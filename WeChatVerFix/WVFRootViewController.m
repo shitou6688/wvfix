@@ -26,6 +26,7 @@
 #import "WVFLicense.h"
 #import "WVFCrash.h"
 #import "WVFGateViewController.h"
+#import "WeChatVerFix-Swift.h"
 
 extern char **environ;
 
@@ -770,7 +771,6 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 
 - (void)showGate:(NSString *)message {
     if (self.gateVC) {
-        [self.gateVC setStatusText:message isError:YES];
         return;
     }
 
@@ -784,20 +784,17 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
         return;
     }
 
-    WVFGateViewController *vc = [[WVFGateViewController alloc] init];
-    vc.initialMessage = message;
     __weak typeof(self) weakSelf = self;
-    vc.onFinish = ^{
+    UIViewController *host = [WVFGateHost makeViewController:message ?: @""
+                                                   onSuccess:^{
         [weakSelf hideGate];
         [weakSelf updateLicenseIdle];
         [weakSelf setResult:@"✓ 激活成功" color:CLR_GREEN];
-    };
-    vc.modalPresentationStyle = UIModalPresentationOverFullScreen;
-    vc.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
-    self.gateVC = vc;
+    }];
 
+    self.gateVC = (WVFGateViewController *)host;
     @try {
-        [self presentViewController:vc animated:YES completion:nil];
+        [self presentViewController:host animated:YES completion:nil];
     } @catch (NSException *e) {
         [self log:@"[crash] presentGate: %@", e.reason];
         self.gateVC = nil;
