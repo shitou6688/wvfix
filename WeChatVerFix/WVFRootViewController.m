@@ -737,12 +737,12 @@ static void wvfRebuildLSInApp(void)
                          message:@"默认方式只刷新应用状态，不关闭后台 App。\n强制方式会重启桌面（黑屏），后台 App 全部关闭。"
                   preferredStyle:UIAlertControllerStyleActionSheet];
     __weak typeof(self) weakSelf = self;
-    [ac addAction:[UIAlertAction actionWithTitle:@"仅刷新（推荐）"
+    [ac addAction:[UIAlertAction actionWithTitle:@"仅刷新（不重启桌面）"
                                            style:UIAlertActionStyleDefault
                                          handler:^(UIAlertAction *a) {
         [weakSelf runRebuildHard:NO];
     }]];
-    [ac addAction:[UIAlertAction actionWithTitle:@"重启桌面（关闭后台）"
+    [ac addAction:[UIAlertAction actionWithTitle:@"重建图标缓存（同巨魔，会黑屏）"
                                            style:UIAlertActionStyleDestructive
                                          handler:^(UIAlertAction *a) {
         [weakSelf runRebuildHard:YES];
@@ -754,7 +754,7 @@ static void wvfRebuildLSInApp(void)
 
 
 - (void)onRebuildIconCache {
-    [self runRebuildHard:NO];
+    [self runRebuildHard:YES];
 }
 
 - (void)onRebuildIconCacheHard {
@@ -1285,7 +1285,7 @@ static void wvfRebuildLSInApp(void)
 
     NSArray *steps = @[
         @[@"1", @"点「改写版本」（绿色）", CLR_GREEN],
-        @[@"2", @"点「重建缓存」（橙色），默认只刷新状态不关后台", CLR_ORANGE],
+        @[@"2", @"点「重建缓存」（橙色），会黑屏几秒，属正常", CLR_ORANGE],
         @[@"3", @"黑屏结束后，从后台进入微信，正常登录", CLR_BLUE],
         @[@"4", @"确认登录成功后，才点「还原版本」（灰色）", CLR_GRAY],
     ];
