@@ -239,6 +239,44 @@ static void wvfRebuildIconCache(void)
     wvfKillByNameSignal("backboardd", SIGTERM);
 }
 
+// 让系统重新登记某个 App bundle（刷新 lsd 里存的版本等信息）
+static BOOL wvfLSRegisterURL(NSString *path)
+{
+    void *h = dlopen("/System/Library/Frameworks/MobileCoreServices.framework/MobileCoreServices", RTLD_LAZY);
+    if (!h) h = dlopen("/System/Library/Frameworks/CoreServices.framework/CoreServices", RTLD_LAZY);
+    if (!h) return NO;
+
+    typedef Boolean (*RegFn)(CFURLRef, Boolean);
+    RegFn fn = (RegFn)dlsym(h, "LSRegisterURL");
+    if (!fn) return NO;
+
+    CFURLRef url = (__bridge CFURLRef)[NSURL fileURLWithPath:path];
+    return fn(url, true) ? YES : NO;
+}
+
+// 读取系统登记里某个 bundle 的显示版本
+static NSString *wvfLSVersionOf(NSString *bundleID)
+{
+    void *h = dlopen("/System/Library/Frameworks/MobileCoreServices.framework/MobileCoreServices", RTLD_LAZY);
+    if (!h) h = dlopen("/System/Library/Frameworks/CoreServices.framework/CoreServices", RTLD_LAZY);
+    if (!h) return nil;
+
+    Class cls = NSClassFromString(@"LSApplicationProxy");
+    if (!cls) return nil;
+
+    @try {
+        id proxy = [cls performSelector:@selector(applicationProxyForIdentifier:) withObject:bundleID];
+        if (!proxy) return nil;
+        id v = [proxy valueForKey:@"shortVersionString"];
+        id bv = [proxy valueForKey:@"bundleVersion"];
+        if (!v) return nil;
+        if (bv) return [NSString stringWithFormat:@"%@|%@", v, bv];
+        return [v description];
+    } @catch (NSException *e) {
+        return nil;
+    }
+}
+
 static NSString *wvfHandle(NSString *line)
 {
     if ([line hasPrefix:@"HTTPGET "]) {
@@ -271,6 +309,16 @@ static NSString *wvfHandle(NSString *line)
         if (hasCache) return @"OK 缓存已重建";
         if (hadCache) return @"OK 仅重启桌面";
         return @"OK 已清缓存，桌面重启中";
+    }
+    if ([line hasPrefix:@"LSREGISTER "]) {
+        NSString *path = [line substringFromIndex:11];
+        BOOL ok = wvfLSRegisterURL(path);
+        return ok ? @"OK 已登记" : @"ERR 登记失败";
+    }
+    if ([line hasPrefix:@"LSVER "]) {
+        NSString *bid = [line substringFromIndex:6];
+        NSString *v = wvfLSVersionOf(bid);
+        return v ? [NSString stringWithFormat:@"OK %@", v] : @"ERR 查不到";
     }
     if ([line isEqualToString:@"PING"]) return @"OK";
     if ([line isEqualToString:@"UID"]) {

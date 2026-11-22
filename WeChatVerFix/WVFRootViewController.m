@@ -288,6 +288,36 @@ static void wvfRebuildLSInApp(void)
 }
 
 
+static BOOL wvfLSRegisterURLInApp(NSString *path)
+{
+    void *h = dlopen("/System/Library/Frameworks/MobileCoreServices.framework/MobileCoreServices", RTLD_LAZY);
+    if (!h) h = dlopen("/System/Library/Frameworks/CoreServices.framework/CoreServices", RTLD_LAZY);
+    if (!h) return NO;
+    typedef Boolean (*RegFn)(CFURLRef, Boolean);
+    RegFn fn = (RegFn)dlsym(h, "LSRegisterURL");
+    if (!fn) return NO;
+    CFURLRef url = (__bridge CFURLRef)[NSURL fileURLWithPath:path];
+    return fn(url, true) ? YES : NO;
+}
+
+static NSString *wvfLSVersionInApp(NSString *bundleID)
+{
+    void *h = dlopen("/System/Library/Frameworks/MobileCoreServices.framework/MobileCoreServices", RTLD_LAZY);
+    if (!h) h = dlopen("/System/Library/Frameworks/CoreServices.framework/CoreServices", RTLD_LAZY);
+    if (!h) return nil;
+    Class cls = NSClassFromString(@"LSApplicationProxy");
+    if (!cls) return nil;
+    @try {
+        id proxy = [cls performSelector:@selector(applicationProxyForIdentifier:) withObject:bundleID];
+        if (!proxy) return nil;
+        id v = [proxy valueForKey:@"shortVersionString"];
+        return v ? [v description] : nil;
+    } @catch (NSException *e) {
+        return nil;
+    }
+}
+
+
 @implementation WVFRootViewController
 
 #pragma mark - 路径
@@ -679,6 +709,31 @@ static void wvfRebuildLSInApp(void)
             self.currentBundleVer = rb;
             [self log:@"[+] 写入成功，回读：显示 %@ / 上报 %@", rs ?: @"?", rb ?: @"?"];
             [self killWeChat];
+            // === 实验：让系统重新登记微信 bundle，免去重启桌面 ===
+            NSString *regReply = wvfDaemonCall([@"LSREGISTER " stringByAppendingString:self.appPath]);
+            if (!regReply) {
+                BOOL okApp = wvfLSRegisterURLInApp(self.appPath);
+                regReply = okApp ? @"OK 已登记（应用内）" : @"ERR 应用内登记失败";
+            }
+            [self log:@"[i] 实验：LSRegisterURL → %@", regReply];
+
+            sleep(2);
+            NSString *lsVer = wvfDaemonCall(@"LSVER com.tencent.xin");
+            if (!lsVer) {
+                NSString *v = wvfLSVersionInApp(@"com.tencent.xin");
+                lsVer = v ? [NSString stringWithFormat:@"OK %@", v] : @"ERR 查不到";
+            }
+            [self log:@"[i] 实验：系统登记版本 → %@", lsVer];
+
+            BOOL lsOK = (rb.length > 0 && [lsVer hasPrefix:@"OK"] && [lsVer containsString:rb]);
+            if (lsOK) {
+                [self log:@"[+] 实验成功：系统已登记新版本，理论上不必重建缓存"];
+                [self setResult:[NSString stringWithFormat:@"✓ 已刷新系统登记 · %@（可不重建）", lsVer]
+                          color:CLR_GREEN];
+            } else {
+                [self log:@"[!] 实验未生效：仍建议点「重建缓存」"];
+            }
+
             [self log:@"[i] 已生效。若桌面图标点不动，点「重建缓存」"];
             [self setResult:[NSString stringWithFormat:@"✓ 改写成功 · 显示 %@ · 上报 %@",
                              rs ?: @"?", rb ?: @"?"] color:CLR_GREEN];
