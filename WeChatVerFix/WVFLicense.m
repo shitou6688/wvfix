@@ -36,6 +36,34 @@ static NSString *const kWVFAppID     = @"wvf_license_appid_override";
 static const long long kPermanentExpire = 4102243200LL;
 static const NSTimeInterval kOfflineGrace = 3 * 86400;
 
+static NSString *wvfDaemonCall(NSString *cmd)
+{
+    const char *sockPath = "/var/mobile/Documents/WeChatVerFix/wvf.sock";
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return nil;
+
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, sockPath, sizeof(addr.sun_path) - 1);
+
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        close(fd);
+        return nil;
+    }
+
+    NSString *line = [cmd stringByAppendingString:@"\n"];
+    write(fd, line.UTF8String, strlen(line.UTF8String));
+
+    char buf[4096] = {0};
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) return nil;
+    buf[n] = 0;
+    return [[NSString stringWithUTF8String:buf]
+            stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
 @implementation WVFLicense
 
 + (instancetype)shared {
