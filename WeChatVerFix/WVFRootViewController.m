@@ -844,6 +844,26 @@ static NSString *wvfSafeWorkDir(void)
 
 
 
+- (void)onResetLicense {
+    UIAlertController *ac = [UIAlertController
+        alertControllerWithTitle:@"重置本机授权"
+                         message:@"清除本机保存的卡密与到期时间，需要重新输入卡密才能使用。设备绑定请到服务器管理页解除。"
+                  preferredStyle:UIAlertControllerStyleAlert];
+    __weak typeof(self) weakSelf = self;
+    [ac addAction:[UIAlertAction actionWithTitle:@"取消"
+                                           style:UIAlertActionStyleCancel handler:nil]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"确定重置"
+                                           style:UIAlertActionStyleDestructive
+                                         handler:^(UIAlertAction *a) {
+        [[WVFLicense shared] resetActivation];
+        [weakSelf log:@"[i] 已重置本机授权"];
+        [weakSelf updateLicenseIdle];
+        [weakSelf showGate:@"已重置，请重新输入卡密"];
+    }]];
+    [self presentViewController:ac animated:YES completion:nil];
+}
+
+
 - (void)onSetAppID {
     UIAlertController *ac = [UIAlertController
         alertControllerWithTitle:@"设置应用 ID"
@@ -1091,6 +1111,9 @@ static NSString *wvfSafeWorkDir(void)
 
     UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(16, by, inner, titleH)];
     t.text = @"微信版本伪装";
+    t.userInteractionEnabled = YES;
+    [t addGestureRecognizer:[[UILongPressGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onResetLicense)]];
     t.font = [UIFont boldSystemFontOfSize:14];
     t.textColor = CLR_TEXT;
     [card addSubview:t];

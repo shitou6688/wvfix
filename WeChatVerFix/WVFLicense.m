@@ -338,6 +338,22 @@ typedef CFTypeRef (*MGCopyAnswerFn)(CFStringRef);
 }
 
 
+- (void)resetActivation {
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    [d removeObjectForKey:kWVFKey];
+    [d removeObjectForKey:kWVFExpire];
+    [d removeObjectForKey:kWVFLastCheck];
+    [d synchronize];
+
+    // 同时清掉 Keychain 里的那份，避免"重装后自动登录"
+    NSDictionary *q = @{
+        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+        (__bridge id)kSecAttrService: kWVFChainService,
+        (__bridge id)kSecAttrAccount: @"device",
+    };
+    SecItemDelete((__bridge CFDictionaryRef)q);
+}
+
 - (void)diagnoseWithCompletion:(void (^)(NSString *text))completion
 {
     NSString *base = [self serverURL];
