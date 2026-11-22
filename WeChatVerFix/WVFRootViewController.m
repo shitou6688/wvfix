@@ -909,19 +909,28 @@ static void wvfCleanRestrictionsInApp(void)
 - (void)onRebuildLongPress {
     UIAlertController *ac = [UIAlertController
         alertControllerWithTitle:@"重建图标缓存"
-                         message:@"默认方式只刷新应用状态，不关闭后台 App。\n强制方式会重启桌面（黑屏），后台 App 全部关闭。"
+                         message:@"默认方式与 TrollStore 完全一致：会黑屏并重启桌面。"
                   preferredStyle:UIAlertControllerStyleActionSheet];
     __weak typeof(self) weakSelf = self;
-    [ac addAction:[UIAlertAction actionWithTitle:@"仅刷新（不重启桌面）"
-                                           style:UIAlertActionStyleDefault
-                                         handler:^(UIAlertAction *a) {
-        [weakSelf runRebuildHard:NO];
-    }]];
+
     [ac addAction:[UIAlertAction actionWithTitle:@"重建图标缓存（同巨魔，会黑屏）"
                                            style:UIAlertActionStyleDestructive
                                          handler:^(UIAlertAction *a) {
         [weakSelf runRebuildHard:YES];
     }]];
+
+    [ac addAction:[UIAlertAction actionWithTitle:@"仅刷新（不重启桌面）"
+                                           style:UIAlertActionStyleDefault
+                                         handler:^(UIAlertAction *a) {
+        [weakSelf runRebuildHard:NO];
+    }]];
+
+    [ac addAction:[UIAlertAction actionWithTitle:@"仅清理失效记录（清灰图标）"
+                                           style:UIAlertActionStyleDefault
+                                         handler:^(UIAlertAction *a) {
+        [weakSelf onPurgeRecordsOnly];
+    }]];
+
     [ac addAction:[UIAlertAction actionWithTitle:@"取消"
                                            style:UIAlertActionStyleCancel handler:nil]];
     [self presentViewController:ac animated:YES completion:nil];
@@ -943,7 +952,7 @@ static void wvfCleanRestrictionsInApp(void)
         [self log:@"[i] 开始刷新应用状态（不重启桌面）"];
         [self setResult:@"正在刷新应用状态…" color:CLR_ORANGE];
     } else {
-        [self log:@"[i] 开始重建图标缓存（进程内，等同 TrollStore）"];
+        [self log:@"[i] 开始重建图标缓存（顺序与 TrollStore refresh-all 一致）"];
         [self setResult:@"重建中，5 秒后黑屏…" color:CLR_ORANGE];
     }
 
@@ -951,8 +960,17 @@ static void wvfCleanRestrictionsInApp(void)
         BOOL ok = NO;
 
         if (hard) {
-            // ===== 与 IconFix 完全一致的进程内流程 =====
-            // ① 删图标缓存
+            // ===== 严格按 TrollStore refresh-all 的顺序 =====
+
+            // ① cleanRestrictions：清理 ClientTruth 里失效的系统 App 记录
+            @try {
+                wvfCleanRestrictionsInApp();
+                [self log:@"[i] ① cleanRestrictions 完成"];
+            } @catch (NSException *e) {
+                [self log:@"[!] cleanRestrictions 异常：%@", e.reason];
+            }
+
+            // ② 删图标缓存
             NSArray *caches = @[
                 @"/var/containers/Shared/SystemGroup/systemgroup.com.apple.lsd.iconscache/Library/Caches/com.apple.IconsCache",
                 @"/var/mobile/Library/Caches/com.apple.IconsCache",
@@ -960,60 +978,42 @@ static void wvfCleanRestrictionsInApp(void)
             for (NSString *c in caches) {
                 NSError *e = nil;
                 [[NSFileManager defaultManager] removeItemAtPath:c error:&e];
-                [self log:@"[i] 删缓存 %@ → %@", c.lastPathComponent,
+                [self log:@"[i] ② 删缓存 %@ → %@", c.lastPathComponent,
                       e ? e.localizedDescription : @"成功"];
             }
 
-            // ② 重建 LaunchServices 数据库
+            // ③ 重建 LaunchServices 数据库
             wvfRebuildLSInApp();
-            [self log:@"[i] LS 数据库重建已调用"];
+            [self log:@"[i] ③ LS 数据库重建已调用"];
 
-            // ③ 注销指向已删除 App 的失效记录
-            int purged = wvfPurgeMissingAppsInApp();
-            [self log:@"[i] 注销失效记录：%d 项", purged];
-
-            // ③.5 完整重登记 TrollStore 安装的 App（等同 TrollStore refreshAppRegistrations）
-            {
-                NSMutableString *regLog = [NSMutableString string];
-                int n = WVFRefreshTrollStoreApps(regLog);
-                [self log:@"[i] 完整重登记 App：%d 个 %@", n,
-                      regLog.length ? regLog : @""];
-            }
-
-            // ④ 收紧限制记录
-            @try {
-                wvfCleanRestrictionsInApp();
-            } @catch (NSException *e) {
-                [self log:@"[!] cleanRestrictions 异常：%@", e.reason];
-            }
+            // ④ 完整重登记（等同 TrollStore 的 refreshAppRegistrations）
+            NSMutableString *regLog = [NSMutableString string];
+            int n = WVFRefreshTrollStoreApps(regLog);
+            [self log:@"[i] ④ 完整重登记 App：%d 个 %@", n, regLog.length ? regLog : @""];
 
             ok = YES;
 
             // ⑤ 倒计时后重启桌面
             for (int i = 5; i >= 1; i--) {
-                [self log:@"[i] 倒计时 %d 秒后黑屏…", i];
+                [self log:@"[i] ⑤ 倒计时 %d 秒后黑屏…", i];
                 [self setResult:[NSString stringWithFormat:@"即将黑屏，倒计时 %d 秒…", i]
                           color:CLR_ORANGE];
                 sleep(1);
             }
 
-            int n = wvfKillByNameInApp("backboardd", SIGTERM);
-            [self log:@"[i] 结束 backboardd（SIGTERM）：%d 个进程", n];
-            if (n <= 0) {
+            int killed = wvfKillByNameInApp("backboardd", SIGTERM);
+            [self log:@"[i] ⑥ backboardd ← SIGTERM：%d 个进程", killed];
+            if (killed <= 0) {
                 NSString *dr = wvfDaemonCall(@"KILLBACKBOARD");
                 [self log:@"[i] 改用守护进程：%@", dr ?: @"无响应"];
             }
         } else {
-            NSString *dr = wvfDaemonCall(@"REBUILDSOFT");
-            if (dr && [dr hasPrefix:@"OK"]) {
-                [self log:@"[i] 守护进程：%@", [dr substringFromIndex:3]];
-                ok = YES;
-            } else {
-                wvfRebuildLSInApp();
-                wvfPurgeMissingAppsInApp();
-                [self log:@"[i] 进程内刷新完成"];
-                ok = YES;
-            }
+            // 轻量：只重建 LS 数据库 + 重登记，不动桌面
+            wvfRebuildLSInApp();
+            NSMutableString *regLog = [NSMutableString string];
+            int n = WVFRefreshTrollStoreApps(regLog);
+            [self log:@"[i] 已刷新：重登记 %d 个 App %@", n, regLog.length ? regLog : @""];
+            ok = YES;
         }
 
         if (ok) {
@@ -1024,6 +1024,22 @@ static void wvfCleanRestrictionsInApp(void)
             [self setResult:@"✗ 重建失败，请点右上角「日志」" color:CLR_RED];
         }
 
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.view.userInteractionEnabled = YES;
+        });
+    });
+}
+
+- (void)onPurgeRecordsOnly {
+    self.view.userInteractionEnabled = NO;
+    [self log:@"[i] 开始清理失效登记（不重启桌面）"];
+    dispatch_async(self.workQueue, ^{
+        int n = wvfPurgeMissingAppsInApp();
+        [self log:@"[i] 已注销失效记录：%d 项", n];
+        [self setResult:(n >= 0)
+            ? [NSString stringWithFormat:@"✓ 已清理 %d 项失效记录", n]
+            : @"✗ 清理失败"
+                    color:(n >= 0) ? CLR_GREEN : CLR_RED];
         dispatch_async(dispatch_get_main_queue(), ^{
             self.view.userInteractionEnabled = YES;
         });
