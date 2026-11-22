@@ -234,9 +234,115 @@ static void wvfRefreshOnly(void)
 // 完整：与 TrollStore refresh-all 等价（会重启桌面）
 static void wvfRebuildIconCache(void)
 {
+    // 与 TrollStore refresh-all 完全一致的顺序
+    wvfCleanRestrictions();
     wvfCoreRefresh();
+    if (!wvfShouldRegisterAsUser()) {
+        wvfRefreshAppRegistrations();
+    }
     // TrollStore 用 SIGTERM（softly=YES），不是 SIGKILL
     wvfKillByNameSignal("backboardd", SIGTERM);
+}
+
+#pragma mark - 从 TrollStore RootHelper 移植
+
+// 可删除的系统 App 判定（TrollStore 同款）
+static BOOL wvfIsRemovableSystemApp(NSString *appId)
+{
+    return [[NSFileManager defaultManager]
+            fileExistsAtPath:[@"/System/Library/AppSignatures" stringByAppendingPathComponent:appId]];
+}
+
+// 清理 ClientTruth.plist 里"已移除系统 App"的残留记录
+static void wvfCleanRestrictions(void)
+{
+    NSString *clientTruthPath = @"/private/var/containers/Shared/SystemGroup/"
+                                 "systemgroup.com.apple.configurationprofiles/Library/"
+                                 "ConfigurationProfiles/ClientTruth.plist";
+    NSURL *url = [NSURL fileURLWithPath:clientTruthPath];
+    NSDictionary *dict = [NSDictionary dictionaryWithContentsOfURL:url];
+    if (!dict) return;
+
+    NSArray *valuesArr = nil;
+    NSDictionary *lsdAppRemoval = dict[@"com.apple.lsd.appremoval"];
+    if ([lsdAppRemoval isKindOfClass:NSDictionary.class]) {
+        NSDictionary *cr = lsdAppRemoval[@"clientRestrictions"];
+        if ([cr isKindOfClass:NSDictionary.class]) {
+            NSDictionary *uni = cr[@"union"];
+            if ([uni isKindOfClass:NSDictionary.class]) {
+                NSDictionary *removed = uni[@"removedSystemAppBundleIDs"];
+                if ([removed isKindOfClass:NSDictionary.class]) {
+                    valuesArr = removed[@"values"];
+                }
+            }
+        }
+    }
+    if (!valuesArr.count) return;
+
+    NSMutableArray *arr = valuesArr.mutableCopy;
+    __block BOOL changed = NO;
+    [arr enumerateObjectsWithOptions:NSEnumerationReverse
+                          usingBlock:^(NSString *value, NSUInteger idx, BOOL *stop) {
+        if (![value isKindOfClass:NSString.class] || !wvfIsRemovableSystemApp(value)) {
+            [arr removeObjectAtIndex:idx];
+            changed = YES;
+        }
+    }];
+    if (!changed) return;
+
+    NSMutableDictionary *mut = (__bridge_transfer NSMutableDictionary *)
+        CFPropertyListCreateDeepCopy(kCFAllocatorDefault,
+                                     (__bridge CFDictionaryRef)dict,
+                                     kCFPropertyListMutableContainersAndLeaves);
+    mut[@"com.apple.lsd.appremoval"][@"clientRestrictions"][@"union"]
+       [@"removedSystemAppBundleIDs"][@"values"] = arr;
+    [mut writeToURL:url error:nil];
+
+    // profiled 需要重启才生效（TrollStore 用 SIGKILL）
+    wvfKillByNameSignal("profiled", SIGKILL);
+}
+
+// 是否应"以用户身份登记"（装了 AppSync 时为真）
+static BOOL wvfShouldRegisterAsUser(void)
+{
+    NSArray *cands = @[
+        @"/var/jb/Library/MobileSubstrate/DynamicLibraries/AppSyncUnified-FrontBoard.dylib",
+        @"/Library/MobileSubstrate/DynamicLibraries/AppSyncUnified-FrontBoard.dylib",
+    ];
+    for (NSString *p in cands) {
+        if ([[NSFileManager defaultManager] fileExistsAtPath:p]) return YES;
+    }
+    return NO;
+}
+
+// 重新登记所有已安装 App（对应 TrollStore 的 refreshAppRegistrations）
+static void wvfRefreshAppRegistrations(void)
+{
+    NSMutableArray *roots = [NSMutableArray arrayWithObjects:
+        @"/var/containers/Bundle/Application",
+        @"/Applications",
+        @"/var/jb/Applications", nil];
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    for (NSString *root in roots) {
+        NSArray *subs = [fm contentsOfDirectoryAtPath:root error:NULL];
+        for (NSString *sub in subs) {
+            NSString *dir = [root stringByAppendingPathComponent:sub];
+            BOOL isDir = NO;
+            if (![fm fileExistsAtPath:dir isDirectory:&isDir] || !isDir) continue;
+
+            if ([sub hasSuffix:@".app"]) {
+                wvfLSRegisterURL(dir);
+                continue;
+            }
+            // /var/containers/Bundle/Application/<uuid>/App.app
+            NSArray *inner = [fm contentsOfDirectoryAtPath:dir error:NULL];
+            for (NSString *x in inner) {
+                if (![x hasSuffix:@".app"]) continue;
+                wvfLSRegisterURL([dir stringByAppendingPathComponent:x]);
+            }
+        }
+    }
 }
 
 // 让系统重新登记某个 App bundle（刷新 lsd 里存的版本等信息）
