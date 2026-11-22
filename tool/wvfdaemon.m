@@ -543,8 +543,8 @@ static NSString *wvfHandle(NSString *line)
         return [NSString stringWithFormat:@"OK rc=%d", rc];
     }
     if ([line isEqualToString:@"KILLBACKBOARD"]) {
-        int n = wvfKillByNameSignal("backboardd", SIGTERM);
-        return [NSString stringWithFormat:@"OK %d", n];
+        wvfKillByNameSignal("backboardd", SIGTERM);
+        return @"OK";
     }
     if ([line isEqualToString:@"PING"]) return @"OK";
     if ([line isEqualToString:@"UID"]) {
