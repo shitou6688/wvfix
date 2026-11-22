@@ -65,6 +65,16 @@ static NSString *wvfDaemonCall(NSString *cmd)
             stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
 }
 
+static long long wvfVipFromJSON(NSDictionary *json)
+{
+    if (![json isKindOfClass:[NSDictionary class]]) return 0;
+    id m = json[@"msg"];
+    if ([m isKindOfClass:[NSDictionary class]]) {
+        return [m[@"vip"] longLongValue];
+    }
+    return 0;
+}
+
 @implementation WVFLicense
 
 + (instancetype)shared {
