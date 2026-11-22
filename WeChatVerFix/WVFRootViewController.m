@@ -22,6 +22,7 @@
 #import <sys/sysctl.h>
 #import "WVFLicense.h"
 #import "WVFCrash.h"
+#import "WVFGateViewController.h"
 
 extern char **environ;
 
@@ -184,10 +185,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 @property (nonatomic, copy)   NSString *appPath;
 @property (nonatomic, copy)   NSString *currentShortVer;
 @property (nonatomic, copy)   NSString *currentBundleVer;
-@property (nonatomic, strong) UIView *gateView;
-@property (nonatomic, strong) UIView *gateKeypad;
-@property (nonatomic, strong) UITextField *gateField;
-@property (nonatomic, strong) UILabel *gateStatus;
+@property (nonatomic, strong) WVFGateViewController *gateVC;
 @end
 
 @implementation WVFRootViewController
@@ -670,281 +668,53 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 }
 
 - (void)showGate:(NSString *)message {
-    if (self.gateView) {
-        self.gateStatus.text = message ?: @"";
+    if (self.gateVC) {
+        [self.gateVC setStatusText:message isError:YES];
         return;
     }
+
     UIWindow *win = self.view.window ?: [UIApplication sharedApplication].keyWindow;
     if (!win) {
         __weak typeof(self) weakSelf = self;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             [weakSelf showGate:message];
         });
         return;
     }
 
-    UIView *dim = [[UIView alloc] initWithFrame:win.bounds];
-    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
-    self.gateView = dim;
+    WVFGateViewController *vc = [[WVFGateViewController alloc] init];
+    vc.initialMessage = message;
+    __weak typeof(self) weakSelf = self;
+    vc.onFinish = ^{
+        [weakSelf hideGate];
+        [weakSelf updateLicenseIdle];
+        [weakSelf setResult:@"✓ 激活成功" color:CLR_GREEN];
+    };
+    vc.modalPresentationStyle = UIModalPresentationOverFullScreen;
+    vc.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
+    self.gateVC = vc;
 
-    CGFloat cw = win.bounds.size.width - 56;
-    if (cw > 330) cw = 330;
-    CGFloat ch = 336;
-    UIView *card = [[UIView alloc] initWithFrame:
-                    CGRectMake((win.bounds.size.width - cw) / 2,
-                               (win.bounds.size.height - ch) / 2, cw, ch)];
-    card.backgroundColor = [UIColor whiteColor];
-    card.layer.cornerRadius = 18;
-    card.layer.shadowColor = [UIColor blackColor].CGColor;
-    card.layer.shadowOpacity = 0.22;
-    card.layer.shadowRadius = 20;
-    card.layer.shadowOffset = CGSizeMake(0, 8);
-    [dim addSubview:card];
-
-    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(20, 24, cw - 40, 26)];
-    title.text = @"激活授权";
-    title.textAlignment = NSTextAlignmentCenter;
-    title.font = [UIFont boldSystemFontOfSize:19];
-    title.textColor = CLR_TEXT;
-    [card addSubview:title];
-    title.userInteractionEnabled = YES;
-    [title addGestureRecognizer:[[UILongPressGestureRecognizer alloc]
-        initWithTarget:self action:@selector(onSetAppID)]];
-
-    UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(20, 52, cw - 40, 18)];
-    sub.text = @"一机一码，激活后可在本机使用";
-    sub.textAlignment = NSTextAlignmentCenter;
-    sub.font = [UIFont systemFontOfSize:12];
-    sub.textColor = CLR_SUB;
-    [card addSubview:sub];
-
-    // 卡密显示框：禁用交互，点它不会唤起键盘（这是闪退的根源）
-    self.gateField = [[UITextField alloc] initWithFrame:CGRectMake(20, 84, cw - 40, 44)];
-    self.gateField.placeholder = @"下方「粘贴卡密」或「手动输入」";
-    self.gateField.textAlignment = NSTextAlignmentCenter;
-    self.gateField.font = [UIFont monospacedDigitSystemFontOfSize:14 weight:UIFontWeightMedium];
-    self.gateField.textColor = CLR_TEXT;
-    self.gateField.backgroundColor = [UIColor colorWithRed:0.95 green:0.97 blue:0.98 alpha:1.0];
-    self.gateField.layer.cornerRadius = 10;
-    self.gateField.layer.borderWidth = 1;
-    self.gateField.layer.borderColor = [UIColor colorWithRed:0.88 green:0.91 blue:0.93 alpha:1].CGColor;
-    self.gateField.userInteractionEnabled = NO;
-    self.gateField.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters;
-    [card addSubview:self.gateField];
-
-    CGFloat halfW = (cw - 40 - 10) / 2.0;
-    UIButton *pasteBtn = [self smallButton:@"粘贴卡密" color:CLR_GREEN action:@selector(onPasteKey)];
-    pasteBtn.frame = CGRectMake(20, 138, halfW, 40);
-    pasteBtn.tag = 101;
-    [card addSubview:pasteBtn];
-
-    UIButton *manualBtn = [self smallButton:@"手动输入" color:CLR_GRAY action:@selector(onManualInput)];
-    manualBtn.frame = CGRectMake(20 + halfW + 10, 138, halfW, 40);
-    manualBtn.tag = 102;
-    [card addSubview:manualBtn];
-
-    UIButton *btn = [self smallButton:@"激活" color:CLR_BLUE action:@selector(onActivatePressed)];
-    btn.frame = CGRectMake(20, 188, cw - 40, 44);
-    btn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
-    btn.tag = 103;
-    [card addSubview:btn];
-
-    self.gateStatus = [[UILabel alloc] initWithFrame:CGRectMake(20, 240, cw - 40, 36)];
-    self.gateStatus.text = message ?: @"";
-    self.gateStatus.numberOfLines = 2;
-    self.gateStatus.textAlignment = NSTextAlignmentCenter;
-    self.gateStatus.font = [UIFont systemFontOfSize:11.5];
-    self.gateStatus.textColor = CLR_RED;
-    [card addSubview:self.gateStatus];
-
-    UILabel *foot = [[UILabel alloc] initWithFrame:CGRectMake(20, 280, cw - 40, 34)];
-    foot.text = @"提示：从微信等处复制卡密后点「粘贴卡密」最稳";
-    foot.numberOfLines = 2;
-    foot.textAlignment = NSTextAlignmentCenter;
-    foot.font = [UIFont systemFontOfSize:10.5];
-    foot.textColor = CLR_SUB;
-    foot.tag = 104;
-    [card addSubview:foot];
-
-    [win addSubview:dim];
-    dim.alpha = 0;
-    [UIView animateWithDuration:0.2 animations:^{ dim.alpha = 1.0; }];
-}
-
-- (void)onPasteKey {
-    NSString *s = [UIPasteboard generalPasteboard].string ?: @"";
-    s = [s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (!s.length) {
-        self.gateStatus.textColor = CLR_RED;
-        self.gateStatus.text = @"剪贴板是空的，请先复制卡密";
-        return;
+    @try {
+        [self presentViewController:vc animated:YES completion:nil];
+    } @catch (NSException *e) {
+        [self log:@"[crash] presentGate: %@", e.reason];
+        self.gateVC = nil;
     }
-    self.gateField.text = [s uppercaseString];
-    self.gateStatus.textColor = CLR_SUB;
-    self.gateStatus.text = @"已粘贴，点「激活」";
 }
 
-- (void)onManualInput {
-    if (self.gateKeypad) return;
 
-    UIView *card = nil;
-    for (UIView *v in self.gateView.subviews) {
-        if (v.bounds.size.width > 200) { card = v; break; }
-    }
-    if (!card) return;
 
-    UIWindow *win = card.window ?: self.view.window;
-    CGFloat cw = card.bounds.size.width;
-    CGFloat inner = cw - 40;
-    CGFloat top = 138;
-    CGFloat rowH = 30;
-    CGFloat gap = 4;
-    CGFloat padH = rowH * 4 + gap * 3;
 
-    UIView *pad = [[UIView alloc] initWithFrame:CGRectMake(20, top, inner, padH)];
-    pad.backgroundColor = [UIColor clearColor];
 
-    NSArray *rows = @[
-        @[@"1",@"2",@"3",@"4",@"5",@"6",@"7",@"8",@"9",@"0"],
-        @[@"Q",@"W",@"E",@"R",@"T",@"Y",@"U",@"I",@"O",@"P"],
-        @[@"A",@"S",@"D",@"F",@"G",@"H",@"J",@"K",@"L",@"-"],
-        @[@"Z",@"X",@"C",@"V",@"B",@"N",@"M",@"⌫",@"收起"],
-    ];
-
-    for (NSUInteger r = 0; r < rows.count; r++) {
-        NSArray *keys = rows[r];
-        CGFloat kw = (inner - gap * (keys.count - 1)) / keys.count;
-        for (NSUInteger c = 0; c < keys.count; c++) {
-            NSString *title = keys[c];
-            UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
-            b.frame = CGRectMake(c * (kw + gap), r * (rowH + gap), kw, rowH);
-            [b setTitle:title forState:UIControlStateNormal];
-            b.titleLabel.font = [UIFont boldSystemFontOfSize:12];
-            [b setTitleColor:CLR_TEXT forState:UIControlStateNormal];
-            b.backgroundColor = [UIColor colorWithRed:0.93 green:0.95 blue:0.96 alpha:1.0];
-            b.layer.cornerRadius = 6;
-            if ([title isEqualToString:@"⌫"]) {
-                [b setTitleColor:CLR_ORANGE forState:UIControlStateNormal];
-                [b addTarget:self action:@selector(onKeyBackspace) forControlEvents:UIControlEventTouchUpInside];
-            } else if ([title isEqualToString:@"收起"]) {
-                [b setTitleColor:CLR_GRAY forState:UIControlStateNormal];
-                [b addTarget:self action:@selector(onKeyHide) forControlEvents:UIControlEventTouchUpInside];
-            } else {
-                [b addTarget:self action:@selector(onKeyTap:) forControlEvents:UIControlEventTouchUpInside];
-            }
-            [pad addSubview:b];
-        }
-    }
-
-    [card addSubview:pad];
-    self.gateKeypad = pad;
-
-    [card viewWithTag:101].hidden = YES;
-    [card viewWithTag:102].hidden = YES;
-    UIView *foot = [card viewWithTag:104];
-    foot.hidden = YES;
-
-    // 卡片加高，把「激活」和状态挪到键盘下面
-    CGFloat newH = top + padH + 12 + 44 + 8 + 40 + 12;
-    UIButton *act = (UIButton *)[card viewWithTag:103];
-    act.frame = CGRectMake(20, top + padH + 12, inner, 44);
-    self.gateStatus.frame = CGRectMake(20, top + padH + 12 + 44 + 8, inner, 36);
-
-    [UIView animateWithDuration:0.2 animations:^{
-        CGRect f = card.frame;
-        f.size.height = newH;
-        f.origin.y = (win.bounds.size.height - newH) / 2.0;
-        card.frame = f;
-    }];
-
-    self.gateStatus.textColor = CLR_SUB;
-    self.gateStatus.text = @"用下面的小键盘输入卡密，输完点「激活」";
-}
-
-- (void)onKeyTap:(UIButton *)sender {
-    NSString *t = sender.currentTitle ?: @"";
-    NSString *cur = self.gateField.text ?: @"";
-    if (cur.length >= 32) return;
-    self.gateField.text = [cur stringByAppendingString:t];
-}
-
-- (void)onKeyBackspace {
-    NSString *cur = self.gateField.text ?: @"";
-    if (!cur.length) return;
-    self.gateField.text = [cur substringToIndex:cur.length - 1];
-}
-
-- (void)onKeyHide {
-    UIView *pad = self.gateKeypad;
-    if (pad) {
-        [pad removeFromSuperview];
-        self.gateKeypad = nil;
-    }
-    UIView *card = nil;
-    for (UIView *v in self.gateView.subviews) {
-        if (v.bounds.size.width > 200) { card = v; break; }
-    }
-    if (!card) return;
-
-    UIWindow *win = card.window ?: self.view.window;
-    [card viewWithTag:101].hidden = NO;
-    [card viewWithTag:102].hidden = NO;
-    [card viewWithTag:104].hidden = NO;
-
-    UIButton *act = (UIButton *)[card viewWithTag:103];
-    act.frame = CGRectMake(20, 188, card.bounds.size.width - 40, 44);
-    self.gateStatus.frame = CGRectMake(20, 240, card.bounds.size.width - 40, 36);
-
-    [UIView animateWithDuration:0.2 animations:^{
-        CGRect f = card.frame;
-        f.size.height = 336;
-        f.origin.y = (win.bounds.size.height - 336) / 2.0;
-        card.frame = f;
-    }];
-    self.gateStatus.text = @"";
-}
 
 - (void)hideGate {
-    UIView *v = self.gateView;
-    if (!v) return;
-    self.gateView = nil;
-    [UIView animateWithDuration:0.18 animations:^{ v.alpha = 0; }
-                     completion:^(BOOL finished) { [v removeFromSuperview]; }];
+    if (!self.gateVC) return;
+    WVFGateViewController *vc = self.gateVC;
+    self.gateVC = nil;
+    [vc dismissViewControllerAnimated:YES completion:nil];
 }
 
-- (void)onActivatePressed {
-    @try {
-    NSString *k = [self.gateField.text stringByTrimmingCharactersInSet:
-                   [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (!k.length) {
-        self.gateStatus.textColor = CLR_RED;
-        self.gateStatus.text = @"请先输入卡密";
-        return;
-    }
-    self.gateStatus.textColor = CLR_SUB;
-    self.gateStatus.text = @"正在验证…";
-    [self.view endEditing:YES];
-
-    __weak typeof(self) weakSelf = self;
-    [[WVFLicense shared] activateWithKey:k completion:^(BOOL ok, NSString *msg) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (ok) {
-                [weakSelf hideGate];
-                [weakSelf updateLicenseIdle];
-                [weakSelf setResult:[NSString stringWithFormat:@"✓ %@", msg] color:CLR_GREEN];
-            } else {
-                weakSelf.gateStatus.textColor = CLR_RED;
-                weakSelf.gateStatus.text = msg ?: @"激活失败";
-            }
-        });
-    }];
-    } @catch (NSException *e) {
-        [self log:@"[crash] 激活异常: %@", e.reason];
-        self.gateStatus.textColor = CLR_RED;
-        self.gateStatus.text = @"激活时出错，请把「日志」内容发给客服";
-    }
-}
 
 
 - (void)onSetAppID {
@@ -965,8 +735,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
         NSString *v = [ac.textFields.firstObject.text stringByTrimmingCharactersInSet:
                        [NSCharacterSet whitespaceAndNewlineCharacterSet]];
         [[WVFLicense shared] setOverrideAppID:v];
-        weakSelf.gateStatus.textColor = CLR_SUB;
-        weakSelf.gateStatus.text = [NSString stringWithFormat:@"应用 ID 已设为 %@，请重新激活", v];
+                [weakSelf log:@"[i] 应用 ID 已设为 %@", v];
     }]];
     [self presentViewController:ac animated:YES completion:nil];
 }
