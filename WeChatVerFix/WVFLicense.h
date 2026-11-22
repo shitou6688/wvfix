@@ -25,6 +25,9 @@
 - (NSString *)activeKey;
 
 /// 激活（首次）
+/// 服务器诊断：把 ?diag=1 的返回原文取回来（长按「激活」触发）
+- (void)diagnoseWithCompletion:(void (^)(NSString *text))completion;
+
 - (void)activateWithKey:(NSString *)key
              completion:(void (^)(BOOL ok, NSString *msg))completion;
 
