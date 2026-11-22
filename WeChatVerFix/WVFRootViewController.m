@@ -717,6 +717,10 @@ static NSString *wvfLSVersionInApp(NSString *bundleID)
             }
             [self log:@"[i] 实验：LSRegisterURL → %@", regReply];
 
+            // 只刷新微信这一条系统登记（不重启桌面）
+            NSString *ucReply = wvfDaemonCall([@"UICACHEP " stringByAppendingString:self.appPath]);
+            [self log:@"[i] 实验：uicache -p → %@", ucReply ?: @"无 uicache"];
+
             sleep(2);
             NSString *lsVer = wvfDaemonCall(@"LSVER com.tencent.xin");
             if (!lsVer) {

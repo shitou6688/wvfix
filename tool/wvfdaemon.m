@@ -320,6 +320,16 @@ static NSString *wvfHandle(NSString *line)
         NSString *v = wvfLSVersionOf(bid);
         return v ? [NSString stringWithFormat:@"OK %@", v] : @"ERR 查不到";
     }
+    if ([line hasPrefix:@"UICACHEP "]) {
+        NSString *path = [line substringFromIndex:9];
+        NSArray *cands = @[@"/var/jb/usr/bin/uicache", @"/usr/bin/uicache"];
+        for (NSString *c in cands) {
+            if (wvfSpawn(c, @[@"-p", path]) >= 0) {
+                return @"OK 已刷新该应用登记";
+            }
+        }
+        return @"ERR 没有 uicache";
+    }
     if ([line isEqualToString:@"PING"]) return @"OK";
     if ([line isEqualToString:@"UID"]) {
         return [NSString stringWithFormat:@"UID %d", getuid()];
