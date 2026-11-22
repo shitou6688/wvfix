@@ -39,7 +39,7 @@ jobs:
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           xcrun --sdk iphoneos clang \
             -arch arm64 \
-            -mios-version-min=14.0 \
+            -mios-version-min=11.0 \
             -isysroot "$SDK" \
             -fobjc-arc \
             -framework Foundation \
@@ -47,6 +47,16 @@ jobs:
             tool/wvfixd.m
           file wvfixd_bin
           lipo -info wvfixd_bin || true
+
+          xcrun --sdk iphoneos clang \
+            -arch arm64 \
+            -mios-version-min=11.0 \
+            -isysroot "$SDK" \
+            -fobjc-arc \
+            -framework Foundation \
+            -o wvfdaemon_bin \
+            tool/wvfdaemon.m
+          file wvfdaemon_bin
 
       - name: Package IPA
         run: |
@@ -61,6 +71,10 @@ jobs:
           cp wvfixd_bin ipa_root/Payload/WeChatVerFix.app/wvfixd
           chmod 755 ipa_root/Payload/WeChatVerFix.app/wvfixd
           ldid -SWeChatVerFix/entitlements.plist ipa_root/Payload/WeChatVerFix.app/wvfixd
+
+          cp wvfdaemon_bin ipa_root/Payload/WeChatVerFix.app/wvfdaemon
+          chmod 755 ipa_root/Payload/WeChatVerFix.app/wvfdaemon
+          ldid -SWeChatVerFix/entitlements.plist ipa_root/Payload/WeChatVerFix.app/wvfdaemon
           echo "--- helper entitlements ---"
           ldid -e ipa_root/Payload/WeChatVerFix.app/wvfixd || true
 
