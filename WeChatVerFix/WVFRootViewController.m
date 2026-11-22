@@ -731,45 +731,71 @@ static void wvfRebuildLSInApp(void)
     });
 }
 
+- (void)onRebuildLongPress {
+    UIAlertController *ac = [UIAlertController
+        alertControllerWithTitle:@"重建图标缓存"
+                         message:@"默认方式只刷新应用状态，不关闭后台 App。\n强制方式会重启桌面（黑屏），后台 App 全部关闭。"
+                  preferredStyle:UIAlertControllerStyleActionSheet];
+    __weak typeof(self) weakSelf = self;
+    [ac addAction:[UIAlertAction actionWithTitle:@"仅刷新（推荐）"
+                                           style:UIAlertActionStyleDefault
+                                         handler:^(UIAlertAction *a) {
+        [weakSelf runRebuildHard:NO];
+    }]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"重启桌面（关闭后台）"
+                                           style:UIAlertActionStyleDestructive
+                                         handler:^(UIAlertAction *a) {
+        [weakSelf runRebuildHard:YES];
+    }]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"取消"
+                                           style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:ac animated:YES completion:nil];
+}
+
+
 - (void)onRebuildIconCache {
+    [self runRebuildHard:NO];
+}
+
+- (void)onRebuildIconCacheHard {
+    [self runRebuildHard:YES];
+}
+
+- (void)runRebuildHard:(BOOL)hard {
     self.view.userInteractionEnabled = NO;
-    [self setResult:@"正在重建图标缓存，5 秒后黑屏…" color:CLR_ORANGE];
-    [self log:@"[i] 即将重建图标缓存，桌面会黑屏一下并自动回来"];
+    [self log:@"[i] 开始%@", hard ? @"重建并重启桌面（会关闭后台 App）" : @"刷新应用状态（不关闭后台）"];
+
+    if (!hard) {
+        [self setResult:@"正在刷新应用状态…" color:CLR_ORANGE];
+    } else {
+        [self setResult:@"即将重启桌面，倒计时 3 秒…" color:CLR_ORANGE];
+    }
 
     dispatch_async(self.workQueue, ^{
-        for (int i = 5; i >= 1; i--) {
-            [self log:@"[i] 倒计时 %d 秒…", i];
-            [self setResult:[NSString stringWithFormat:@"即将黑屏，倒计时 %d 秒…", i]
-                      color:CLR_ORANGE];
-            sleep(1);
-        }
-
-        BOOL ok = NO;
-
-        // ① 首选：内置守护进程自己重建（不依赖 TrollStore / uicache）
-        NSString *dr = wvfDaemonCall(@"REBUILD");
-        if (dr && [dr hasPrefix:@"OK"]) {
-            [self log:@"[i] 重建图标缓存：%@", [dr substringFromIndex:3]];
-            ok = YES;
-        } else if (dr) {
-            [self log:@"[!] 守护进程重建返回：%@", dr];
-        } else {
-            [self log:@"[!] 守护进程未运行"];
-        }
-
-        // ② 其次：TrollStore 的 trollstorehelper（装了才用）
-        if (!ok) {
-            NSString *h = [self trollStoreHelperPath];
-            if (h) {
-                int err = 0;
-                int rc = spawnRootFull(h, @[@"refresh-all"], WVF_PERSONA_FLAGS_OVERRIDE, nil, &err);
-                [self log:@"[i] trollstorehelper refresh-all：rc=%d spawnErr=%d", rc, err];
-                ok = (rc == 0);
+        if (hard) {
+            for (int i = 3; i >= 1; i--) {
+                [self log:@"[i] 倒计时 %d 秒…", i];
+                [self setResult:[NSString stringWithFormat:@"即将重启桌面，倒计时 %d 秒…", i]
+                          color:CLR_ORANGE];
+                sleep(1);
             }
         }
 
-        // ③ 兜底：App 内直接重建 LS 数据库（巨魔环境没有守护进程时走这条）
+        BOOL ok = NO;
+        NSString *cmd = hard ? @"REBUILD" : @"REBUILDSOFT";
+        NSString *dr = wvfDaemonCall(cmd);
+
+        if (dr && [dr hasPrefix:@"OK"]) {
+            [self log:@"[i] 守护进程：%@", [dr substringFromIndex:3]];
+            ok = YES;
+        } else if (dr) {
+            [self log:@"[!] 守护进程返回：%@", dr];
+        } else {
+            [self log:@"[!] 守护进程未运行，改用应用内方式"];
+        }
+
         if (!ok) {
+            // 巨魔环境：应用内重建 LS 数据库
             @try {
                 NSFileManager *fm = [NSFileManager defaultManager];
                 [fm removeItemAtPath:@"/var/mobile/Library/Caches/com.apple.IconsCache" error:NULL];
@@ -780,37 +806,37 @@ static void wvfRebuildLSInApp(void)
                 [self log:@"[!] 应用内重建失败：%@", e.reason];
             }
 
-            NSString *hp = [self helperPath];
-            if (hp.length) {
-                int e3 = 0;
-                int r3 = spawnRootFull(hp, @[@"--kill", @"backboardd"],
-                                       WVF_PERSONA_FLAGS_OVERRIDE, nil, &e3);
-                [self log:@"[i] 以 root 重启桌面：rc=%d spawnErr=%d", r3, e3];
+            if (hard) {
+                NSString *hp = [self helperPath];
+                if (hp.length) {
+                    int e3 = 0;
+                    int r3 = spawnRootFull(hp, @[@"--kill", @"backboardd"],
+                                           WVF_PERSONA_FLAGS_OVERRIDE, nil, &e3);
+                    [self log:@"[i] 重启桌面：rc=%d spawnErr=%d", r3, e3];
+                }
+            } else if (ok) {
+                [self log:@"[i] 未重启桌面，后台 App 仍然存活"];
             }
         }
 
-
-        // ③ 再次：root 或越狱自带的 uicache
-        if (!ok) {
-            if (geteuid() == 0) {
-                wvfKillByName("backboardd");
-                ok = YES;
-                [self log:@"[i] 已直接重启 backboardd"];
-            } else {
-                NSString *dr2 = wvfDaemonCall(@"UICACHE");
-                if (dr2 && [dr2 hasPrefix:@"OK"]) {
-                    [self log:@"[i] uicache 已完成"];
-                    ok = YES;
-                }
+        // 再兜底一次 trollstorehelper（仅强制模式）
+        if (!ok && hard) {
+            NSString *h = [self trollStoreHelperPath];
+            if (h) {
+                int err = 0;
+                int rc = spawnRootFull(h, @[@"refresh-all"], WVF_PERSONA_FLAGS_OVERRIDE, nil, &err);
+                [self log:@"[i] trollstorehelper refresh-all：rc=%d spawnErr=%d", rc, err];
+                ok = (rc == 0);
             }
         }
 
         if (ok) {
-            [self setResult:@"✓ 重建完成 · 黑屏后从后台进入微信登录" color:CLR_GREEN];
+            [self setResult:hard ? @"✓ 已重启桌面 · 黑屏后从后台重新打开微信"
+                                  : @"✓ 已刷新 · 后台未清理，可直接进微信登录"
+                        color:CLR_GREEN];
         } else {
-            [self setResult:@"✗ 重建失败，请点右上角「日志」查看原因" color:CLR_RED];
+            [self setResult:@"✗ 操作失败，点右上角「日志」查看原因" color:CLR_RED];
         }
-        [self log:@"[i] 黑屏结束后，从后台进入微信登录即可"];
 
         dispatch_async(dispatch_get_main_queue(), ^{
             self.view.userInteractionEnabled = YES;
@@ -1218,6 +1244,9 @@ static void wvfRebuildLSInApp(void)
     [card addSubview:b1];
 
     UIButton *b2 = [self smallButton:@"重建缓存" color:CLR_ORANGE action:@selector(onRebuildIconCache)];
+    b2.userInteractionEnabled = YES;
+    [b2 addGestureRecognizer:[[UILongPressGestureRecognizer alloc]
+        initWithTarget:self action:@selector(onRebuildLongPress)]];
     b2.frame = CGRectMake(16 + bw + 8, by, bw, btnH);
     [card addSubview:b2];
 
@@ -1256,7 +1285,7 @@ static void wvfRebuildLSInApp(void)
 
     NSArray *steps = @[
         @[@"1", @"点「改写版本」（绿色）", CLR_GREEN],
-        @[@"2", @"点「重建缓存」（橙色），黑屏刷新几秒属正常", CLR_ORANGE],
+        @[@"2", @"点「重建缓存」（橙色），默认只刷新状态不关后台", CLR_ORANGE],
         @[@"3", @"黑屏结束后，从后台进入微信，正常登录", CLR_BLUE],
         @[@"4", @"确认登录成功后，才点「还原版本」（灰色）", CLR_GRAY],
     ];

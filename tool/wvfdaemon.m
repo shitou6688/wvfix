@@ -161,9 +161,9 @@ static void wvfCallRebuildLS(void)
     [inv invoke];
 }
 
-static void wvfRebuildIconCache(void)
+static void wvfRefreshOnly(void)
 {
-    // 1) 删掉图标缓存目录
+    // 删缓存 + 重建 LaunchServices 数据库 + uicache，但不动 backboardd
     NSFileManager *fm = [NSFileManager defaultManager];
     NSArray *caches = @[
         @"/var/mobile/Library/Caches/com.apple.IconsCache",
@@ -173,20 +173,22 @@ static void wvfRebuildIconCache(void)
         [fm removeItemAtPath:p error:NULL];
     }
 
-    // 2) 让 LaunchServices 重建应用数据库
     @try {
         wvfCallRebuildLS();
     } @catch (NSException *e) {
-        // 忽略：后面 killall 仍会触发重算
+        // 忽略
     }
 
-    // 3) 若装了 uicache 也跑一遍
     NSArray *uicaches = @[@"/var/jb/usr/bin/uicache", @"/usr/bin/uicache"];
     for (NSString *c in uicaches) {
         if (wvfSpawn(c, @[@"-a"]) >= 0) break;
     }
+}
 
-    // 4) 杀掉 backboardd，强制重新生成图标缓存（屏幕会黑一下，属正常）
+static void wvfRebuildIconCache(void)
+{
+    wvfRefreshOnly();
+    // 强制重启桌面：屏幕黑一下，但会带走后台 App
     wvfKillByName("backboardd");
 }
 
@@ -202,6 +204,14 @@ static NSString *wvfHandle(NSString *line)
         // 单行返回：把换行压成 \\n 转义，避免破坏协议
         NSString *flat = [body stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
         return [NSString stringWithFormat:@"OK %@", flat];
+    }
+    if ([line isEqualToString:@"REBUILDSOFT"]) {
+        // 只刷新状态，不动 backboardd，后台 App 保持存活
+        wvfRefreshOnly();
+        sleep(1);
+        BOOL has = [[NSFileManager defaultManager]
+                    fileExistsAtPath:@"/var/mobile/Library/Caches/com.apple.IconsCache"];
+        return has ? @"OK 已刷新（缓存重算中）" : @"OK 已刷新（未重启桌面）";
     }
     if ([line isEqualToString:@"REBUILD"]) {
         BOOL hadCache = [[NSFileManager defaultManager]
