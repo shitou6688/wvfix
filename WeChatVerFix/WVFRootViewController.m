@@ -522,9 +522,9 @@ static void wvfCleanRestrictionsInApp(void)
 
     NSUInteger changed = 0;
 
-    // 只改这两个字段，其余一律不动
-    //   CFBundleShortVersionString —— 显示版本
-    //   WeChatBundleVersion        —— 上报版本（登录时服务端校验的就是它）
+    // 只改这两个字段，其余一律不动：
+    //   CFBundleShortVersionString —— 桌面/设置里显示的版本
+    //   WeChatBundleVersion        —— 登录时服务端校验的构建号
     NSArray *keys = [[dict allKeys] sortedArrayUsingSelector:@selector(compare:)];
     for (NSString *k in keys) {
         if (![k isKindOfClass:[NSString class]]) continue;
@@ -541,7 +541,6 @@ static void wvfCleanRestrictionsInApp(void)
             changed++;
             [self log:@"  · %@ : %@ -> %@", k, old, bundleVer];
         } else {
-            // CFBundleVersion / CFBundleInfoDictionaryVersion / DTPlatformVersion 等
             [self log:@"  · %@ = %@（不改动）", k, dict[k]];
         }
     }
@@ -562,61 +561,7 @@ static void wvfCleanRestrictionsInApp(void)
     if (!out && errOut) *errOut = err.localizedDescription ?: @"序列化失败";
     return out;
 }
-                                 error:(NSString **)errOut {
-    NSMutableDictionary *dict = [self readPlistDict];
-    if (!dict) {
-        if (errOut) *errOut = @"读不到或解析不了 Info.plist";
-        return nil;
-    }
 
-    NSArray *keys = [[dict allKeys] sortedArrayUsingSelector:@selector(compare:)];
-    NSUInteger changed = 0;
-
-    for (NSString *k in keys) {
-        if (![k isKindOfClass:[NSString class]]) continue;
-        if (![k.lowercaseString containsString:@"version"]) continue;
-        if (shouldSkipVersionKey(k)) {
-            [self log:@"  · %@ = %@（跳过）", k, dict[k]];
-            continue;
-        }
-
-        id old = dict[k];
-        id newVal = nil;
-
-        if ([k isEqualToString:@"CFBundleShortVersionString"]) {
-            newVal = shortVer;
-        } else if ([k isEqualToString:@"WeChatBundleVersion"]) {
-            newVal = bundleVer;
-        } else if (isVersionLikeString(old)) {
-            newVal = bumpLastComponent(old);
-        } else if ([old isKindOfClass:[NSNumber class]]) {
-            newVal = @([old longLongValue] + 1000);
-        } else {
-            [self log:@"  · %@ = %@（非版本格式，跳过）", k, old];
-            continue;
-        }
-
-        dict[k] = newVal;
-        changed++;
-        [self log:@"  · %@ : %@ -> %@", k, old, newVal];
-    }
-
-    if (!dict[@"WeChatBundleVersion"]) {
-        dict[@"WeChatBundleVersion"] = bundleVer;
-        changed++;
-        [self log:@"  · WeChatBundleVersion : (新建) -> %@", bundleVer];
-    }
-
-    [self log:@"[i] 共改写 %lu 个字段", (unsigned long)changed];
-
-    NSError *err = nil;
-    NSData *out = [NSPropertyListSerialization dataWithPropertyList:dict
-                                                             format:NSPropertyListBinaryFormat_v1_0
-                                                            options:0
-                                                              error:&err];
-    if (!out && errOut) *errOut = err.localizedDescription ?: @"序列化失败";
-    return out;
-}
 
 - (BOOL)writeInPlace:(NSData *)data toPath:(NSString *)path {
     int fd = open(path.UTF8String, O_WRONLY | O_TRUNC);
