@@ -361,6 +361,78 @@ static int wvfPurgeMissingAppsInApp(void)
 static int wvfKillByNameInApp(const char *name, int sig);
 static void wvfCleanRestrictionsInApp(void);
 static int wvfPurgeMissingAppsInApp(void);
+
+static int wvfKillByNameInApp(const char *name, int sig)
+{
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0 };
+    size_t size = 0;
+    if (sysctl(mib, 4, NULL, &size, NULL, 0) != 0) return -1;
+    struct kinfo_proc *procs = malloc(size);
+    if (!procs) return -2;
+    if (sysctl(mib, 4, procs, &size, NULL, 0) != 0) { free(procs); return -3; }
+    int count = (int)(size / sizeof(struct kinfo_proc));
+    int killed = 0;
+    pid_t self = getpid();
+    for (int i = 0; i < count; i++) {
+        pid_t pid = procs[i].kp_proc.p_pid;
+        if (pid <= 0 || pid == self) continue;
+        if (strncmp(procs[i].kp_proc.p_comm, name, MAXCOMLEN) == 0) {
+            if (kill(pid, sig) == 0) killed++;
+        }
+    }
+    free(procs);
+    return killed;
+}
+
+static void wvfCleanRestrictionsInApp(void)
+{
+    NSString *path = @"/private/var/containers/Shared/SystemGroup/"
+                      "systemgroup.com.apple.configurationprofiles/Library/"
+                      "ConfigurationProfiles/ClientTruth.plist";
+    NSURL *url = [NSURL fileURLWithPath:path];
+    NSDictionary *dict = [NSDictionary dictionaryWithContentsOfURL:url];
+    if (!dict) return;
+
+    NSArray *values = nil;
+    NSDictionary *removal = dict[@"com.apple.lsd.appremoval"];
+    if ([removal isKindOfClass:NSDictionary.class]) {
+        NSDictionary *cr = removal[@"clientRestrictions"];
+        if ([cr isKindOfClass:NSDictionary.class]) {
+            NSDictionary *uni = cr[@"union"];
+            if ([uni isKindOfClass:NSDictionary.class]) {
+                NSDictionary *rm = uni[@"removedSystemAppBundleIDs"];
+                if ([rm isKindOfClass:NSDictionary.class]) values = rm[@"values"];
+            }
+        }
+    }
+    if (!values.count) return;
+
+    NSMutableArray *arr = values.mutableCopy;
+    __block BOOL changed = NO;
+    [arr enumerateObjectsWithOptions:NSEnumerationReverse
+                          usingBlock:^(NSString *v, NSUInteger idx, BOOL *stop) {
+        BOOL removable = NO;
+        if ([v isKindOfClass:NSString.class]) {
+            removable = [[NSFileManager defaultManager]
+                         fileExistsAtPath:[@"/System/Library/AppSignatures"
+                         stringByAppendingPathComponent:v]];
+        }
+        if (!removable) {
+            [arr removeObjectAtIndex:idx];
+            changed = YES;
+        }
+    }];
+    if (!changed) return;
+
+    NSMutableDictionary *mut = (__bridge_transfer NSMutableDictionary *)
+        CFPropertyListCreateDeepCopy(kCFAllocatorDefault,
+                                     (__bridge CFDictionaryRef)dict,
+                                     kCFPropertyListMutableContainersAndLeaves);
+    mut[@"com.apple.lsd.appremoval"][@"clientRestrictions"][@"union"]
+       [@"removedSystemAppBundleIDs"][@"values"] = arr;
+    [mut writeToURL:url error:nil];
+}
+
 @implementation WVFRootViewController
 
 #pragma mark - 路径
