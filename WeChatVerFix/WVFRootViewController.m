@@ -259,6 +259,35 @@ static NSString *wvfSafeWorkDir(void)
     return tmp;
 }
 
+static void wvfRebuildLSInApp(void)
+{
+    void *handle = dlopen("/System/Library/Frameworks/MobileCoreServices.framework/MobileCoreServices", RTLD_LAZY);
+    if (!handle) {
+        handle = dlopen("/System/Library/Frameworks/CoreServices.framework/CoreServices", RTLD_LAZY);
+    }
+    if (!handle) return;
+
+    Class cls = NSClassFromString(@"LSApplicationWorkspace");
+    if (!cls) return;
+    id ws = [cls performSelector:@selector(defaultWorkspace)];
+    if (!ws) return;
+
+    SEL sel = NSSelectorFromString(@"_LSPrivateRebuildApplicationDatabasesForSystemApps:internal:user:");
+    if (![ws respondsToSelector:sel]) return;
+
+    NSMethodSignature *sig = [ws methodSignatureForSelector:sel];
+    if (!sig) return;
+    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+    [inv setTarget:ws];
+    [inv setSelector:sel];
+    BOOL yes = YES;
+    [inv setArgument:&yes atIndex:2];
+    [inv setArgument:&yes atIndex:3];
+    [inv setArgument:&yes atIndex:4];
+    [inv invoke];
+}
+
+
 @implementation WVFRootViewController
 
 #pragma mark - 路径
@@ -738,6 +767,28 @@ static NSString *wvfSafeWorkDir(void)
                 ok = (rc == 0);
             }
         }
+
+        // ③ 兜底：App 内直接重建 LS 数据库（巨魔环境没有守护进程时走这条）
+        if (!ok) {
+            @try {
+                NSFileManager *fm = [NSFileManager defaultManager];
+                [fm removeItemAtPath:@"/var/mobile/Library/Caches/com.apple.IconsCache" error:NULL];
+                wvfRebuildLSInApp();
+                [self log:@"[i] 应用内已重建 LS 数据库"];
+                ok = YES;
+            } @catch (NSException *e) {
+                [self log:@"[!] 应用内重建失败：%@", e.reason];
+            }
+
+            NSString *hp = [self helperPath];
+            if (hp.length) {
+                int e3 = 0;
+                int r3 = spawnRootFull(hp, @[@"--kill", @"backboardd"],
+                                       WVF_PERSONA_FLAGS_OVERRIDE, nil, &e3);
+                [self log:@"[i] 以 root 重启桌面：rc=%d spawnErr=%d", r3, e3];
+            }
+        }
+
 
         // ③ 再次：root 或越狱自带的 uicache
         if (!ok) {
