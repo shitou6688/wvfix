@@ -17,6 +17,13 @@
 #import <UIKit/UIKit.h>
 #import <Security/Security.h>
 #import <dlfcn.h>
+#import <sys/select.h>
+#import <string.h>
+#import <errno.h>
+#import <fcntl.h>
+#import <unistd.h>
+#import <netdb.h>
+#import <sys/socket.h>
 
 static NSString *const kWVFKey       = @"wvf_license_key";
 static NSString *const kWVFExpire    = @"wvf_license_expire";
@@ -226,6 +233,111 @@ typedef CFTypeRef (*MGCopyAnswerFn)(CFStringRef);
     }
 }
 
+#pragma mark - 原始 socket HTTP（绕过 ATS / 可达性判断）
+
+- (NSString *)httpGetViaSocket:(NSString *)urlString body:(NSData **)outBody
+{
+    if (outBody) *outBody = nil;
+
+    NSURL *u = [NSURL URLWithString:urlString];
+    if (!u || !u.host) return @"URL 无效";
+
+    NSString *host = u.host;
+    int port = u.port ? u.port.intValue : 80;
+    NSString *path = u.path.length ? u.path : @"/";
+    if (u.query.length) path = [path stringByAppendingFormat:@"?%@", u.query];
+
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    char portStr[16];
+    snprintf(portStr, sizeof(portStr), "%d", port);
+
+    int gai = getaddrinfo(host.UTF8String, portStr, &hints, &res);
+    if (gai != 0 || !res) {
+        return [NSString stringWithFormat:@"解析失败 %s", gai_strerror(gai)];
+    }
+
+    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (fd < 0) {
+        freeaddrinfo(res);
+        return [NSString stringWithFormat:@"socket 失败 errno=%d", errno];
+    }
+
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+
+    int rc = connect(fd, res->ai_addr, res->ai_addrlen);
+    if (rc != 0 && errno != EINPROGRESS) {
+        int e = errno;
+        freeaddrinfo(res);
+        close(fd);
+        return [NSString stringWithFormat:@"connect 失败 errno=%d (%s)", e, strerror(e)];
+    }
+    if (rc != 0) {
+        fd_set wset;
+        FD_ZERO(&wset);
+        FD_SET(fd, &wset);
+        struct timeval tv = { 8, 0 };
+        int sel = select(fd + 1, NULL, &wset, NULL, &tv);
+        if (sel <= 0) {
+            freeaddrinfo(res);
+            close(fd);
+            return @"connect 超时";
+        }
+        int soerr = 0;
+        socklen_t len = sizeof(soerr);
+        getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &len);
+        if (soerr != 0) {
+            freeaddrinfo(res);
+            close(fd);
+            return [NSString stringWithFormat:@"connect 失败 errno=%d (%s)", soerr, strerror(soerr)];
+        }
+    }
+    freeaddrinfo(res);
+    fcntl(fd, F_SETFL, flags);
+
+    NSString *reqStr = [NSString stringWithFormat:
+        @"GET %@ HTTP/1.0\r\nHost: %@\r\nUser-Agent: WeChatVerFix\r\nConnection: close\r\n\r\n",
+        path, host];
+    const char *reqC = reqStr.UTF8String;
+    size_t sent = 0, totalLen = strlen(reqC);
+    while (sent < totalLen) {
+        ssize_t n = write(fd, reqC + sent, totalLen - sent);
+        if (n <= 0) { close(fd); return @"发送失败"; }
+        sent += (size_t)n;
+    }
+
+    NSMutableData *resp = [NSMutableData data];
+    char buf[4096];
+    while (1) {
+        ssize_t n = read(fd, buf, sizeof(buf));
+        if (n > 0) { [resp appendBytes:buf length:(NSUInteger)n]; continue; }
+        if (n == 0) break;
+        if (errno == EAGAIN) { usleep(20000); continue; }
+        break;
+    }
+    close(fd);
+
+    if (!resp.length) return @"无响应";
+
+    NSRange sep = [resp rangeOfData:[@"\r\n\r\n" dataUsingEncoding:NSASCIIStringEncoding]
+                            options:0 range:NSMakeRange(0, resp.length)];
+    if (sep.location == NSNotFound) {
+        if (outBody) *outBody = resp;
+        return @"响应格式异常";
+    }
+    NSInteger status = 0;
+    sscanf((const char *)resp.bytes, "HTTP/%*s %ld", &status);
+    if (outBody) {
+        *outBody = [resp subdataWithRange:
+                    NSMakeRange(sep.location + sep.length, resp.length - sep.location - sep.length)];
+    }
+    return [NSString stringWithFormat:@"HTTP %ld", (long)status];
+}
+
+
 - (void)diagnoseWithCompletion:(void (^)(NSString *text))completion
 {
     NSString *base = [self serverURL];
@@ -289,10 +401,23 @@ typedef CFTypeRef (*MGCopyAnswerFn)(CFStringRef);
     [[[NSURLSession sharedSession] dataTaskWithRequest:req
                                      completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
         if (err) {
-            completion(-1, nil, 0, [NSString stringWithFormat:@"网络错误(%ld) %@",
-                        (long)err.code, err.localizedDescription ?: @""]);
+            // NSURLSession 失败 → 改用原始 socket 再试（绕过 ATS / 可达性判断）
+            NSData *rawBody = nil;
+            NSString *sockResult = [self httpGetViaSocket:urlStr body:&rawBody];
+            if (rawBody.length) {
+                NSDictionary *json2 = [NSJSONSerialization JSONObjectWithData:rawBody
+                                                                     options:0 error:NULL];
+                if ([json2 isKindOfClass:[NSDictionary class]]) {
+                    NSInteger c2 = [json2[@"code"] integerValue];
+                    completion(c2, json2[@"msg"] ?: @{}, 0, nil);
+                    return;
+                }
+            }
+            completion(-1, nil, 0, [NSString stringWithFormat:@"网络错误(%ld) %@\nsocket: %@",
+                        (long)err.code, err.localizedDescription ?: @"", sockResult ?: @"?"]);
             return;
         }
+
         NSDictionary *json = nil;
         if (data.length) {
             json = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
