@@ -19,6 +19,7 @@
 #import <stdio.h>
 #import <sys/wait.h>
 #import <sys/stat.h>
+#import <sys/sysctl.h>
 #import "WVFLicense.h"
 #import "WVFCrash.h"
 
