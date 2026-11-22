@@ -749,7 +749,7 @@ static void wvfRebuildLSInApp(void)
         // ① 首选：内置守护进程自己重建（不依赖 TrollStore / uicache）
         NSString *dr = wvfDaemonCall(@"REBUILD");
         if (dr && [dr hasPrefix:@"OK"]) {
-            [self log:@"[i] 重建图标缓存：守护进程已完成（删缓存 → 重建 LS 数据库 → 重启桌面）"];
+            [self log:@"[i] 重建图标缓存：%@", [dr substringFromIndex:3]];
             ok = YES;
         } else if (dr) {
             [self log:@"[!] 守护进程重建返回：%@", dr];

@@ -204,8 +204,16 @@ static NSString *wvfHandle(NSString *line)
         return [NSString stringWithFormat:@"OK %@", flat];
     }
     if ([line isEqualToString:@"REBUILD"]) {
+        BOOL hadCache = [[NSFileManager defaultManager]
+                         fileExistsAtPath:@"/var/mobile/Library/Caches/com.apple.IconsCache"];
         wvfRebuildIconCache();
-        return @"OK";
+        // 等系统重建：IconsCache 会重新生成
+        sleep(4);
+        BOOL hasCache = [[NSFileManager defaultManager]
+                         fileExistsAtPath:@"/var/mobile/Library/Caches/com.apple.IconsCache"];
+        if (hasCache) return @"OK 缓存已重建";
+        if (hadCache) return @"OK 仅重启桌面";
+        return @"OK 已清缓存，桌面重启中";
     }
     if ([line isEqualToString:@"PING"]) return @"OK";
     if ([line isEqualToString:@"UID"]) {
