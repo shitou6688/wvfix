@@ -25,6 +25,7 @@
 #import <sys/un.h>
 #import "WVFLicense.h"
 #import "WVFCrash.h"
+#import "WVFLSRegister.h"
 #import "WVFGateViewController.h"
 #import "WeChatVerFix-Swift.h"
 
@@ -970,6 +971,14 @@ static void wvfCleanRestrictionsInApp(void)
             // ③ 注销指向已删除 App 的失效记录
             int purged = wvfPurgeMissingAppsInApp();
             [self log:@"[i] 注销失效记录：%d 项", purged];
+
+            // ③.5 完整重登记 TrollStore 安装的 App（等同 TrollStore refreshAppRegistrations）
+            {
+                NSMutableString *regLog = [NSMutableString string];
+                int n = WVFRefreshTrollStoreApps(regLog);
+                [self log:@"[i] 完整重登记 App：%d 个 %@", n,
+                      regLog.length ? regLog : @""];
+            }
 
             // ④ 收紧限制记录
             @try {
