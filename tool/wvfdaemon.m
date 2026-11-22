@@ -542,6 +542,10 @@ static NSString *wvfHandle(NSString *line)
         int rc = wvfSpawn(hp, @[@"refresh-all"]);
         return [NSString stringWithFormat:@"OK rc=%d", rc];
     }
+    if ([line isEqualToString:@"KILLBACKBOARD"]) {
+        int n = wvfKillByNameSignal("backboardd", SIGTERM);
+        return [NSString stringWithFormat:@"OK %d", n];
+    }
     if ([line isEqualToString:@"PING"]) return @"OK";
     if ([line isEqualToString:@"UID"]) {
         return [NSString stringWithFormat:@"UID %d", getuid()];

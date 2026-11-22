@@ -322,6 +322,42 @@ static NSString *wvfLSVersionInApp(NSString *bundleID)
 }
 
 
+static int wvfPurgeMissingAppsInApp(void)
+{
+    NSArray *fwPaths = @[
+        @"/System/Library/PrivateFrameworks/CoreServicesStore.framework/CoreServicesStore",
+        @"/System/Library/Frameworks/CoreServices.framework/CoreServices",
+        @"/System/Library/PrivateFrameworks/MobileCoreServices.framework/MobileCoreServices",
+        @"/System/Library/Frameworks/MobileCoreServices.framework/MobileCoreServices",
+    ];
+    for (NSString *p in fwPaths) dlopen(p.fileSystemRepresentation, RTLD_LAZY);
+
+    Class cls = NSClassFromString(@"LSApplicationWorkspace");
+    if (!cls) return -1;
+
+    id ws = nil;
+    @try {
+        ws = ((id (*)(id, SEL))objc_msgSend)(cls, @selector(defaultWorkspace));
+    } @catch (NSException *e) { return -2; }
+    if (!ws) return -2;
+
+    int removed = 0;
+    @try {
+        NSArray *all = ((id (*)(id, SEL))objc_msgSend)(ws, @selector(allApplications));
+        for (id proxy in all) {
+            NSURL *url = [proxy valueForKey:@"bundleURL"];
+            NSString *path = url.path;
+            if (!path.length) continue;
+            if ([[NSFileManager defaultManager] fileExistsAtPath:path]) continue;
+            if (((BOOL (*)(id, SEL, id))objc_msgSend)(ws, @selector(unregisterApplication:), url)) {
+                removed++;
+            }
+        }
+    } @catch (NSException *e) { return -3; }
+    return removed;
+}
+
+
 @implementation WVFRootViewController
 
 #pragma mark - 路径
@@ -826,98 +862,82 @@ static NSString *wvfLSVersionInApp(NSString *bundleID)
 
 - (void)runRebuildHard:(BOOL)hard {
     self.view.userInteractionEnabled = NO;
-    [self log:@"[i] 开始%@", hard ? @"重建并重启桌面（会关闭后台 App）" : @"刷新应用状态（不关闭后台）"];
 
     if (!hard) {
+        [self log:@"[i] 开始刷新应用状态（不重启桌面）"];
         [self setResult:@"正在刷新应用状态…" color:CLR_ORANGE];
     } else {
-        [self setResult:@"即将重启桌面，倒计时 3 秒…" color:CLR_ORANGE];
+        [self log:@"[i] 开始重建图标缓存（进程内，等同 TrollStore）"];
+        [self setResult:@"重建中，5 秒后黑屏…" color:CLR_ORANGE];
     }
 
     dispatch_async(self.workQueue, ^{
+        BOOL ok = NO;
+
         if (hard) {
-            for (int i = 3; i >= 1; i--) {
-                [self log:@"[i] 倒计时 %d 秒…", i];
-                [self setResult:[NSString stringWithFormat:@"即将重启桌面，倒计时 %d 秒…", i]
+            // ===== 与 IconFix 完全一致的进程内流程 =====
+            // ① 删图标缓存
+            NSArray *caches = @[
+                @"/var/containers/Shared/SystemGroup/systemgroup.com.apple.lsd.iconscache/Library/Caches/com.apple.IconsCache",
+                @"/var/mobile/Library/Caches/com.apple.IconsCache",
+            ];
+            for (NSString *c in caches) {
+                NSError *e = nil;
+                [[NSFileManager defaultManager] removeItemAtPath:c error:&e];
+                [self log:@"[i] 删缓存 %@ → %@", c.lastPathComponent,
+                      e ? e.localizedDescription : @"成功"];
+            }
+
+            // ② 重建 LaunchServices 数据库
+            wvfRebuildLSInApp();
+            [self log:@"[i] LS 数据库重建已调用"];
+
+            // ③ 注销指向已删除 App 的失效记录
+            int purged = wvfPurgeMissingAppsInApp();
+            [self log:@"[i] 注销失效记录：%d 项", purged];
+
+            // ④ 收紧限制记录
+            @try {
+                wvfCleanRestrictionsInApp();
+            } @catch (NSException *e) {
+                [self log:@"[!] cleanRestrictions 异常：%@", e.reason];
+            }
+
+            ok = YES;
+
+            // ⑤ 倒计时后重启桌面
+            for (int i = 5; i >= 1; i--) {
+                [self log:@"[i] 倒计时 %d 秒后黑屏…", i];
+                [self setResult:[NSString stringWithFormat:@"即将黑屏，倒计时 %d 秒…", i]
                           color:CLR_ORANGE];
                 sleep(1);
             }
-        }
 
-        BOOL ok = NO;
-
-        // ① 优先：调用内置的 TrollStore 官方 trollstorehelper refresh-all（完整移植）
-        if (hard) {
-            NSString *helper = [[NSBundle mainBundle] pathForResource:@"trollstorehelper" ofType:nil];
-            if (helper.length) {
-                NSString *tr = wvfDaemonCall([@"TSREFRESH " stringByAppendingString:helper]);
-                [self log:@"[i] trollstorehelper refresh-all → %@", tr ?: @"无响应"];
-                if (tr && [tr hasPrefix:@"OK rc=0"]) {
-                    [self log:@"[+] 已完成（等同 TrollStore 重建图标缓存）"];
-                    ok = YES;
-                }
-            } else {
-                [self log:@"[!] 内置 trollstorehelper 缺失"];
+            int n = wvfKillByNameInApp("backboardd", SIGTERM);
+            [self log:@"[i] 结束 backboardd（SIGTERM）：%d 个进程", n];
+            if (n <= 0) {
+                NSString *dr = wvfDaemonCall(@"KILLBACKBOARD");
+                [self log:@"[i] 改用守护进程：%@", dr ?: @"无响应"];
             }
-        }
-
-        // ② 内置实现（helper 不可用时）
-        NSString *cmd = hard ? @"REBUILD" : @"REBUILDSOFT";
-        NSString *dr = ok ? nil : wvfDaemonCall(cmd);
-
-        if (ok) {
-            // 官方 helper 已成功，跳过内置实现
-        } else if (dr && [dr hasPrefix:@"OK"]) {
-            [self log:@"[i] 守护进程：%@", [dr substringFromIndex:3]];
-            ok = YES;
-        } else if (dr) {
-            [self log:@"[!] 守护进程返回：%@", dr];
         } else {
-            [self log:@"[!] 守护进程未运行，改用应用内方式"];
-        }
-
-        if (!ok) {
-            // 巨魔环境：应用内重建 LS 数据库
-            @try {
-                NSFileManager *fm = [NSFileManager defaultManager];
-                [fm removeItemAtPath:@"/var/mobile/Library/Caches/com.apple.IconsCache" error:NULL];
-                wvfRebuildLSInApp();
-                [self log:@"[i] 应用内已重建 LS 数据库"];
+            NSString *dr = wvfDaemonCall(@"REBUILDSOFT");
+            if (dr && [dr hasPrefix:@"OK"]) {
+                [self log:@"[i] 守护进程：%@", [dr substringFromIndex:3]];
                 ok = YES;
-            } @catch (NSException *e) {
-                [self log:@"[!] 应用内重建失败：%@", e.reason];
-            }
-
-            if (hard) {
-                NSString *hp = [self helperPath];
-                if (hp.length) {
-                    int e3 = 0;
-                    int r3 = spawnRootFull(hp, @[@"--kill", @"backboardd"],
-                                           WVF_PERSONA_FLAGS_OVERRIDE, nil, &e3);
-                    [self log:@"[i] 重启桌面：rc=%d spawnErr=%d", r3, e3];
-                }
-            } else if (ok) {
-                [self log:@"[i] 未重启桌面，后台 App 仍然存活"];
-            }
-        }
-
-        // 再兜底一次 trollstorehelper（仅强制模式）
-        if (!ok && hard) {
-            NSString *h = [self trollStoreHelperPath];
-            if (h) {
-                int err = 0;
-                int rc = spawnRootFull(h, @[@"refresh-all"], WVF_PERSONA_FLAGS_OVERRIDE, nil, &err);
-                [self log:@"[i] trollstorehelper refresh-all：rc=%d spawnErr=%d", rc, err];
-                ok = (rc == 0);
+            } else {
+                wvfRebuildLSInApp();
+                wvfPurgeMissingAppsInApp();
+                [self log:@"[i] 进程内刷新完成"];
+                ok = YES;
             }
         }
 
         if (ok) {
-            [self setResult:hard ? @"✓ 已重启桌面 · 黑屏后从后台重新打开微信"
-                                  : @"✓ 已刷新 · 后台未清理，可直接进微信登录"
+            [self setResult:hard ? @"✓ 重建完成 · 黑屏后从后台进入微信"
+                                  : @"✓ 已刷新 · 后台未清理"
                         color:CLR_GREEN];
         } else {
-            [self setResult:@"✗ 操作失败，点右上角「日志」查看原因" color:CLR_RED];
+            [self setResult:@"✗ 重建失败，请点右上角「日志」" color:CLR_RED];
         }
 
         dispatch_async(dispatch_get_main_queue(), ^{
