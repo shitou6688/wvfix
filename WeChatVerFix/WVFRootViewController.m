@@ -752,27 +752,49 @@ static void wvfCleanRestrictionsInApp(void)
     });
 }
 
+static int wvfCountProcess(const char *name)
+{
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0 };
+    size_t size = 0;
+    if (sysctl(mib, 4, NULL, &size, NULL, 0) != 0) return 0;
+    struct kinfo_proc *procs = malloc(size);
+    if (!procs) return 0;
+    if (sysctl(mib, 4, procs, &size, NULL, 0) != 0) { free(procs); return 0; }
+    int count = (int)(size / sizeof(struct kinfo_proc));
+    int found = 0;
+    for (int i = 0; i < count; i++) {
+        if (strncmp(procs[i].kp_proc.p_comm, name, MAXCOMLEN) == 0) found++;
+    }
+    free(procs);
+    return found;
+}
+
+
 - (void)killWeChat {
+    int before = wvfCountProcess("WeChat");
+
     NSString *dr = wvfDaemonCall(@"KILL WeChat");
-    if (dr) {
-        [self log:@"[i] 结束微信进程（守护进程）：%@", dr];
-        return;
+    if (!dr && geteuid() == 0) {
+        wvfKillByName("WeChat");
+    } else if (!dr) {
+        NSString *helper = [self helperPath];
+        if (helper.length) {
+            int err = 0;
+            spawnRootFull(helper, @[@"--kill", @"WeChat"],
+                          WVF_PERSONA_FLAGS_OVERRIDE, nil, &err);
+        }
     }
 
-    if (geteuid() == 0) {
-        int n = wvfKillByName("WeChat");
-        [self log:@"[i] 结束微信进程（root）：%d 个", n];
-        return;
+    usleep(400000);   // 等进程真的退出
+    int after = wvfCountProcess("WeChat");
+    int killed = before - after;
+    if (killed < 0) killed = 0;
+
+    if (before == 0) {
+        [self log:@"[i] 结束微信进程：微信当时没在运行"];
+    } else {
+        [self log:@"[i] 结束微信进程：已终止 %d 个", killed];
     }
-    NSString *helper = [self helperPath];
-    if (!helper.length) {
-        [self log:@"[!] 没有 wvfixd，无法结束微信进程"];
-        return;
-    }
-    int err = 0;
-    int rc = spawnRootFull(helper, @[@"--kill", @"WeChat"],
-                           WVF_PERSONA_FLAGS_OVERRIDE, nil, &err);
-    [self log:@"[i] 结束微信进程：rc=%d spawnErr=%d", rc, err];
 }
 
 - (void)onPatch {
@@ -818,7 +840,7 @@ static void wvfCleanRestrictionsInApp(void)
             self.currentBundleVer = rb;
             [self log:@"[+] 写入成功，回读：显示 %@ / 上报 %@", rs ?: @"?", rb ?: @"?"];
             [self killWeChat];
-            [self log:@"[i] 已生效。若桌面图标点不动，点「重建缓存」"];
+            [self log:@"[i] 已生效。点「重建缓存」黑屏后，从后台进入微信正常登录"];
             [self setResult:[NSString stringWithFormat:@"✓ 改写成功 · 显示 %@ · 上报 %@",
                              rs ?: @"?", rb ?: @"?"] color:CLR_GREEN];
             dispatch_async(dispatch_get_main_queue(), ^{
