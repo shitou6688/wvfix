@@ -22,7 +22,7 @@ struct GateView: View {
     var body: some View {
         ZStack {
             Color.black.opacity(0.45)
-                .ignoresSafeArea()
+                .edgesIgnoringSafeArea(.all)
 
             VStack(spacing: 14) {
                 Text("激活授权")

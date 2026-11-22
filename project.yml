@@ -14,10 +14,9 @@ targets:
           - Info.plist
           - entitlements.plist
     settings:
-      SWIFT_VERSION: "5.0"
-      SWIFT_OBJC_BRIDGING_HEADER: "WeChatVerFix/Bridging-Header.h"
-
       base:
+        SWIFT_VERSION: "5.0"
+        SWIFT_OBJC_BRIDGING_HEADER: "WeChatVerFix/Bridging-Header.h"
         PRODUCT_BUNDLE_IDENTIFIER: com.local.wechatverfix
         INFOPLIST_FILE: WeChatVerFix/Info.plist
         CODE_SIGN_IDENTITY: ""
