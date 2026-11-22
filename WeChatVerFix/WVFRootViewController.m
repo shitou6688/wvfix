@@ -185,6 +185,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 @property (nonatomic, copy)   NSString *currentShortVer;
 @property (nonatomic, copy)   NSString *currentBundleVer;
 @property (nonatomic, strong) UIView *gateView;
+@property (nonatomic, strong) UIView *gateKeypad;
 @property (nonatomic, strong) UITextField *gateField;
 @property (nonatomic, strong) UILabel *gateStatus;
 @end
@@ -735,10 +736,12 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
     CGFloat halfW = (cw - 40 - 10) / 2.0;
     UIButton *pasteBtn = [self smallButton:@"粘贴卡密" color:CLR_GREEN action:@selector(onPasteKey)];
     pasteBtn.frame = CGRectMake(20, 138, halfW, 40);
+    pasteBtn.tag = 101;
     [card addSubview:pasteBtn];
 
     UIButton *manualBtn = [self smallButton:@"手动输入" color:CLR_GRAY action:@selector(onManualInput)];
     manualBtn.frame = CGRectMake(20 + halfW + 10, 138, halfW, 40);
+    manualBtn.tag = 102;
     [card addSubview:manualBtn];
 
     UIButton *btn = [self smallButton:@"激活" color:CLR_BLUE action:@selector(onActivatePressed)];
@@ -781,14 +784,94 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 }
 
 - (void)onManualInput {
-    self.gateField.userInteractionEnabled = YES;
-    @try {
-        [self.gateField becomeFirstResponder];
-    } @catch (NSException *e) {
-        [self log:@"[crash] 键盘: %@", e.reason];
+    // 不调系统键盘：iOS 14 上唤键盘会被沙盒杀掉，这里用自绘键盘
+    if (self.gateKeypad) return;
+
+    UIView *card = nil;
+    for (UIView *v in self.gateView.subviews) {
+        if (v.bounds.size.width > 200) { card = v; break; }
     }
+    if (!card) return;
+
+    CGFloat cw = card.bounds.size.width;
+    CGFloat inner = cw - 40;
+    CGFloat top = 138;
+    CGFloat rowH = 30;
+    CGFloat gap = 4;
+
+    UIView *pad = [[UIView alloc] initWithFrame:CGRectMake(20, top, inner, rowH * 4 + gap * 3)];
+    pad.backgroundColor = [UIColor clearColor];
+
+    NSArray *rows = @[
+        @[@"1",@"2",@"3",@"4",@"5",@"6",@"7",@"8",@"9",@"0"],
+        @[@"Q",@"W",@"E",@"R",@"T",@"Y",@"U",@"I",@"O",@"P"],
+        @[@"A",@"S",@"D",@"F",@"G",@"H",@"J",@"K",@"L",@"-"],
+        @[@"Z",@"X",@"C",@"V",@"B",@"N",@"M",@"⌫",@"收起"],
+    ];
+
+    for (NSUInteger r = 0; r < rows.count; r++) {
+        NSArray *keys = rows[r];
+        CGFloat kw = (inner - gap * (keys.count - 1)) / keys.count;
+        for (NSUInteger c = 0; c < keys.count; c++) {
+            NSString *title = keys[c];
+            UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
+            b.frame = CGRectMake(c * (kw + gap), r * (rowH + gap), kw, rowH);
+            [b setTitle:title forState:UIControlStateNormal];
+            b.titleLabel.font = [UIFont boldSystemFontOfSize:12];
+            [b setTitleColor:CLR_TEXT forState:UIControlStateNormal];
+            b.backgroundColor = [UIColor colorWithRed:0.93 green:0.95 blue:0.96 alpha:1.0];
+            b.layer.cornerRadius = 6;
+            if ([title isEqualToString:@"⌫"]) {
+                [b setTitleColor:CLR_ORANGE forState:UIControlStateNormal];
+                [b addTarget:self action:@selector(onKeyBackspace) forControlEvents:UIControlEventTouchUpInside];
+            } else if ([title isEqualToString:@"收起"]) {
+                [b setTitleColor:CLR_GRAY forState:UIControlStateNormal];
+                [b addTarget:self action:@selector(onKeyHide) forControlEvents:UIControlEventTouchUpInside];
+            } else {
+                [b addTarget:self action:@selector(onKeyTap:) forControlEvents:UIControlEventTouchUpInside];
+            }
+            [pad addSubview:b];
+        }
+    }
+
+    [card addSubview:pad];
+    self.gateKeypad = pad;
+
+    UIView *paste = [card viewWithTag:101];
+    UIView *manual = [card viewWithTag:102];
+    paste.hidden = YES;
+    manual.hidden = YES;
+
     self.gateStatus.textColor = CLR_SUB;
-    self.gateStatus.text = @"若弹出键盘时闪退，请改用「粘贴卡密」";
+    self.gateStatus.text = @"用下面的小键盘输入卡密，输完点「激活」";
+}
+
+- (void)onKeyTap:(UIButton *)sender {
+    NSString *t = sender.currentTitle ?: @"";
+    NSString *cur = self.gateField.text ?: @"";
+    if (cur.length >= 32) return;
+    self.gateField.text = [cur stringByAppendingString:t];
+}
+
+- (void)onKeyBackspace {
+    NSString *cur = self.gateField.text ?: @"";
+    if (!cur.length) return;
+    self.gateField.text = [cur substringToIndex:cur.length - 1];
+}
+
+- (void)onKeyHide {
+    UIView *pad = self.gateKeypad;
+    if (pad) {
+        [pad removeFromSuperview];
+        self.gateKeypad = nil;
+    }
+    UIView *card = nil;
+    for (UIView *v in self.gateView.subviews) {
+        if (v.bounds.size.width > 200) { card = v; break; }
+    }
+    [card viewWithTag:101].hidden = NO;
+    [card viewWithTag:102].hidden = NO;
+    self.gateStatus.text = @"";
 }
 
 - (void)hideGate {
