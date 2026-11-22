@@ -354,6 +354,19 @@ typedef CFTypeRef (*MGCopyAnswerFn)(CFStringRef);
     SecItemDelete((__bridge CFDictionaryRef)q);
 }
 
+- (NSDictionary *)daemonFetch:(NSString *)urlStr
+{
+    NSString *reply = wvfDaemonCall([@"HTTPGET " stringByAppendingString:urlStr]);
+    if (!reply || ![reply hasPrefix:@"OK"]) return nil;
+
+    NSString *jsonStr = [[reply substringFromIndex:3]
+                         stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSData *data = [jsonStr dataUsingEncoding:NSUTF8StringEncoding];
+    if (!data) return nil;
+    id obj = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
+    return [obj isKindOfClass:[NSDictionary class]] ? obj : nil;
+}
+
 - (void)diagnoseWithCompletion:(void (^)(NSString *text))completion
 {
     NSString *base = [self serverURL];

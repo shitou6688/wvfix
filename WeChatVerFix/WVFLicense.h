@@ -30,6 +30,8 @@
 
 - (void)resetActivation;
 
+- (NSDictionary *)daemonFetch:(NSString *)urlStr;
+
 - (void)diagnoseWithCompletion:(void (^)(NSString *text))completion;
 
 - (void)activateWithKey:(NSString *)key
