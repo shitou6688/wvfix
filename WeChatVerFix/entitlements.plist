@@ -30,6 +30,18 @@
 	<key>com.apple.private.persona-mgmt</key>
 	<true/>
 
+	<!-- 让系统把本 App 识别为可联网/可授权的应用（缺这个会一直 -1009） -->
+	<key>application-identifier</key>
+	<string>com.local.wechatverfix</string>
+	<key>com.apple.developer.team-identifier</key>
+	<string>com.local.wechatverfix</string>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>com.local.wechatverfix</string>
+	</array>
+	<key>com.apple.security.network.client</key>
+	<true/>
+
 	<key>get-task-allow</key>
 	<true/>
 </dict>

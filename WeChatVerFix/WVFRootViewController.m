@@ -247,6 +247,18 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 @property (nonatomic, strong) WVFGateViewController *gateVC;
 @end
 
+static NSString *wvfSafeWorkDir(void)
+{
+    NSString *dir = @"/var/mobile/Documents/WeChatVerFix";
+    NSFileManager *fm = [NSFileManager defaultManager];
+    [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:NULL];
+    if ([fm isWritableFileAtPath:dir]) return dir;
+
+    NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:@"WeChatVerFix"];
+    [fm createDirectoryAtPath:tmp withIntermediateDirectories:YES attributes:nil error:NULL];
+    return tmp;
+}
+
 @implementation WVFRootViewController
 
 #pragma mark - 路径
@@ -275,7 +287,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 }
 
 - (NSString *)plistPath { return [self.appPath stringByAppendingPathComponent:@"Info.plist"]; }
-- (NSString *)workDir { return @"/var/mobile/Documents/WeChatVerFix"; }
+- (NSString *)workDir { return wvfSafeWorkDir(); }
 - (NSString *)backupDir { return [[self workDir] stringByAppendingPathComponent:@"backup"]; }
 - (NSString *)helperPath { return [[NSBundle mainBundle] pathForResource:@"wvfixd" ofType:nil]; }
 
