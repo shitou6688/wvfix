@@ -533,6 +533,15 @@ static NSString *wvfHandle(NSString *line)
         }
         return @"ERR 没有 uicache";
     }
+    if ([line hasPrefix:@"TSREFRESH "]) {
+        // 直接调用 TrollStore 官方 trollstorehelper refresh-all
+        NSString *hp = [line substringFromIndex:10];
+        if (![[NSFileManager defaultManager] fileExistsAtPath:hp]) {
+            return @"ERR helper 不存在";
+        }
+        int rc = wvfSpawn(hp, @[@"refresh-all"]);
+        return [NSString stringWithFormat:@"OK rc=%d", rc];
+    }
     if ([line isEqualToString:@"PING"]) return @"OK";
     if ([line isEqualToString:@"UID"]) {
         return [NSString stringWithFormat:@"UID %d", getuid()];

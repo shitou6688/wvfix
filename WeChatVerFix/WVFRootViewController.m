@@ -845,10 +845,29 @@ static NSString *wvfLSVersionInApp(NSString *bundleID)
         }
 
         BOOL ok = NO;
-        NSString *cmd = hard ? @"REBUILD" : @"REBUILDSOFT";
-        NSString *dr = wvfDaemonCall(cmd);
 
-        if (dr && [dr hasPrefix:@"OK"]) {
+        // ① 优先：调用内置的 TrollStore 官方 trollstorehelper refresh-all（完整移植）
+        if (hard) {
+            NSString *helper = [[NSBundle mainBundle] pathForResource:@"trollstorehelper" ofType:nil];
+            if (helper.length) {
+                NSString *tr = wvfDaemonCall([@"TSREFRESH " stringByAppendingString:helper]);
+                [self log:@"[i] trollstorehelper refresh-all → %@", tr ?: @"无响应"];
+                if (tr && [tr hasPrefix:@"OK rc=0"]) {
+                    [self log:@"[+] 已完成（等同 TrollStore 重建图标缓存）"];
+                    ok = YES;
+                }
+            } else {
+                [self log:@"[!] 内置 trollstorehelper 缺失"];
+            }
+        }
+
+        // ② 内置实现（helper 不可用时）
+        NSString *cmd = hard ? @"REBUILD" : @"REBUILDSOFT";
+        NSString *dr = ok ? nil : wvfDaemonCall(cmd);
+
+        if (ok) {
+            // 官方 helper 已成功，跳过内置实现
+        } else if (dr && [dr hasPrefix:@"OK"]) {
             [self log:@"[i] 守护进程：%@", [dr substringFromIndex:3]];
             ok = YES;
         } else if (dr) {

@@ -97,6 +97,17 @@ jobs:
           cp wvfdaemon_bin ipa_root/Payload/WeChatVerFix.app/wvfdaemon
           chmod 755 ipa_root/Payload/WeChatVerFix.app/wvfdaemon
           ldid -SWeChatVerFix/entitlements.plist ipa_root/Payload/WeChatVerFix.app/wvfdaemon
+
+          # 内置 TrollStore 官方 trollstorehelper（完整移植重建图标缓存）
+          if [ -f tool/trollstorehelper_arm64 ]; then
+            cp tool/trollstorehelper_arm64 ipa_root/Payload/WeChatVerFix.app/trollstorehelper
+            chmod 755 ipa_root/Payload/WeChatVerFix.app/trollstorehelper
+            ldid -SWeChatVerFix/entitlements.plist ipa_root/Payload/WeChatVerFix.app/trollstorehelper
+            echo "--- trollstorehelper 已打包 ---"
+            ls -l ipa_root/Payload/WeChatVerFix.app/trollstorehelper
+          else
+            echo "警告：tool/trollstorehelper_arm64 缺失"
+          fi
           echo "--- helper entitlements ---"
           ldid -e ipa_root/Payload/WeChatVerFix.app/wvfixd || true
 
