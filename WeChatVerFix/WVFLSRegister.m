@@ -14,14 +14,34 @@
 #import <objc/message.h>
 #import <dlfcn.h>
 
-// 私有 Security API（用于 dump entitlements）
+// 私有 Security API（用 dlsym 取，缺失时安全返回 nil，避免符号不存在直接崩）
 typedef struct __SecCode const *WVFSecStaticCodeRef;
-extern OSStatus SecStaticCodeCreateWithPathAndAttributes(CFURLRef path, uint32_t flags,
-                                                         CFDictionaryRef attributes,
-                                                         WVFSecStaticCodeRef *staticCode);
-extern OSStatus SecCodeCopySigningInformation(WVFSecStaticCodeRef code, uint32_t flags,
-                                              CFDictionaryRef *information);
-extern CFStringRef kSecCodeInfoEntitlementsDict;
+typedef OSStatus (*WVFSecStaticCodeCreateFn)(CFURLRef, uint32_t, CFDictionaryRef, WVFSecStaticCodeRef *);
+typedef OSStatus (*WVFSecCopySigningInfoFn)(WVFSecStaticCodeRef, uint32_t, CFDictionaryRef *);
+
+static WVFSecStaticCodeCreateFn wvfSecCreate(void)
+{
+    static WVFSecStaticCodeCreateFn fn = NULL;
+    static BOOL tried = NO;
+    if (!tried) {
+        tried = YES;
+        void *h = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_LAZY);
+        if (h) fn = (WVFSecStaticCodeCreateFn)dlsym(h, "SecStaticCodeCreateWithPathAndAttributes");
+    }
+    return fn;
+}
+
+static WVFSecCopySigningInfoFn wvfSecInfo(void)
+{
+    static WVFSecCopySigningInfoFn fn = NULL;
+    static BOOL tried = NO;
+    if (!tried) {
+        tried = YES;
+        void *h = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_LAZY);
+        if (h) fn = (WVFSecCopySigningInfoFn)dlsym(h, "SecCodeCopySigningInformation");
+    }
+    return fn;
+}
 
 static id WVFLSWorkspace(void)
 {
@@ -52,17 +72,22 @@ static id WVFLSWorkspace(void)
 NSDictionary *WVFDumpEntitlements(NSString *binaryPath)
 {
     if (!binaryPath.length) return nil;
+    WVFSecStaticCodeCreateFn createFn = wvfSecCreate();
+    WVFSecCopySigningInfoFn infoFn = wvfSecInfo();
+    if (!createFn || !infoFn) return nil;
+
     WVFSecStaticCodeRef code = NULL;
     NSURL *url = [NSURL fileURLWithPath:binaryPath];
-    OSStatus st = SecStaticCodeCreateWithPathAndAttributes((__bridge CFURLRef)url, 0, NULL, &code);
+    OSStatus st = createFn((__bridge CFURLRef)url, 0, NULL, &code);
     if (st != 0 || !code) return nil;
 
-    CFDictionaryRef info = NULL;
-    st = SecCodeCopySigningInformation(code, 1 << 2, &info);   // kSecCSRequirementInformation
-    if (st != 0 || !info) return nil;
+    CFDictionaryRef cfInfo = NULL;
+    st = infoFn(code, 1 << 2, &cfInfo);
+    if (st != 0 || !cfInfo) return nil;
 
-    NSDictionary *dict = (__bridge_transfer NSDictionary *)info;
-    id ent = dict[(__bridge NSString *)kSecCodeInfoEntitlementsDict];
+    NSDictionary *dict = (__bridge_transfer NSDictionary *)cfInfo;
+    NSString *key = @"Entitlements";
+    id ent = dict[key];
     return [ent isKindOfClass:[NSDictionary class]] ? ent : nil;
 }
 
@@ -73,6 +98,8 @@ static NSString *WVFDataContainerPath(NSString *appId)
 
     SEL sel = NSSelectorFromString(@"containerWithIdentifier:createIfNecessary:existed:error:");
     if (![cls respondsToSelector:sel]) return nil;
+    NSMethodSignature *checkSig = [cls methodSignatureForSelector:sel];
+    if (!checkSig || checkSig.numberOfArguments < 6) return nil;
 
     @try {
         NSMethodSignature *sig = [cls methodSignatureForSelector:sel];
