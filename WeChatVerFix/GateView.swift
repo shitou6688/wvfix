@@ -39,6 +39,8 @@ struct GateView: View {
                     .autocapitalization(.allCharacters)
                     .disableAutocorrection(true)
                     .font(.system(size: 14, weight: .medium, design: .monospaced))
+                    .foregroundColor(Color(red: 0.13, green: 0.16, blue: 0.20))
+                    .accentColor(Color(red: 0.20, green: 0.55, blue: 0.90))
                     .padding(.vertical, 12)
                     .background(
                         RoundedRectangle(cornerRadius: 10)
@@ -141,7 +143,7 @@ struct GateView: View {
     @objc static func makeViewController(_ message: String,
                                         onSuccess: @escaping @convention(block) () -> Void) -> UIViewController {
         let root = GateView(initialMessage: message, onSuccess: onSuccess)
-        let host = UIHostingController(rootView: root)
+        let host = UIHostingController(rootView: root.preferredColorScheme(.light))
         host.modalPresentationStyle = .overFullScreen
         host.modalTransitionStyle = .crossDissolve
         host.view.backgroundColor = .clear

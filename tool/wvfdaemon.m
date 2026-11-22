@@ -97,8 +97,47 @@ static int wvfSpawn(NSString *path, NSArray<NSString *> *args)
     return WIFEXITED(status) ? WEXITSTATUS(status) : -3;
 }
 
+static NSString *wvfHTTPGetSync(NSString *urlStr, NSError **outErr)
+{
+    NSURL *url = [NSURL URLWithString:urlStr];
+    if (!url) {
+        if (outErr) *outErr = [NSError errorWithDomain:@"wvf" code:1 userInfo:nil];
+        return nil;
+    }
+
+    __block NSData *result = nil;
+    __block NSError *error = nil;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
+    req.timeoutInterval = 15;
+    req.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+
+    [[[NSURLSession sharedSession] dataTaskWithRequest:req
+        completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
+        result = data;
+        error = err;
+        dispatch_semaphore_signal(sem);
+    }] resume];
+
+    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(18 * NSEC_PER_SEC)));
+    if (outErr) *outErr = error;
+    return result ? [[NSString alloc] initWithData:result encoding:NSUTF8StringEncoding] : nil;
+}
+
 static NSString *wvfHandle(NSString *line)
 {
+    if ([line hasPrefix:@"HTTPGET "]) {
+        NSString *urlStr = [line substringFromIndex:8];
+        NSError *err = nil;
+        NSString *body = wvfHTTPGetSync(urlStr, &err);
+        if (!body) {
+            return [NSString stringWithFormat:@"ERR %@", err.localizedDescription ?: @"请求失败"];
+        }
+        // 单行返回：把换行压成 \\n 转义，避免破坏协议
+        NSString *flat = [body stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
+        return [NSString stringWithFormat:@"OK %@", flat];
+    }
     if ([line isEqualToString:@"PING"]) return @"OK";
     if ([line isEqualToString:@"UID"]) {
         return [NSString stringWithFormat:@"UID %d", getuid()];
