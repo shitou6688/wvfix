@@ -520,6 +520,55 @@ static void wvfCleanRestrictionsInApp(void)
         return nil;
     }
 
+    NSUInteger changed = 0;
+
+    // 只改这两个字段，其余一律不动
+    //   CFBundleShortVersionString —— 显示版本
+    //   WeChatBundleVersion        —— 上报版本（登录时服务端校验的就是它）
+    NSArray *keys = [[dict allKeys] sortedArrayUsingSelector:@selector(compare:)];
+    for (NSString *k in keys) {
+        if (![k isKindOfClass:[NSString class]]) continue;
+        if (![k.lowercaseString containsString:@"version"]) continue;
+
+        if ([k isEqualToString:@"CFBundleShortVersionString"]) {
+            id old = dict[k];
+            dict[k] = shortVer;
+            changed++;
+            [self log:@"  · %@ : %@ -> %@", k, old, shortVer];
+        } else if ([k isEqualToString:@"WeChatBundleVersion"]) {
+            id old = dict[k];
+            dict[k] = bundleVer;
+            changed++;
+            [self log:@"  · %@ : %@ -> %@", k, old, bundleVer];
+        } else {
+            // CFBundleVersion / CFBundleInfoDictionaryVersion / DTPlatformVersion 等
+            [self log:@"  · %@ = %@（不改动）", k, dict[k]];
+        }
+    }
+
+    if (!dict[@"WeChatBundleVersion"]) {
+        dict[@"WeChatBundleVersion"] = bundleVer;
+        changed++;
+        [self log:@"  · WeChatBundleVersion : (新建) -> %@", bundleVer];
+    }
+
+    [self log:@"[i] 共改写 %lu 个字段（只动显示版本与上报版本）", (unsigned long)changed];
+
+    NSError *err = nil;
+    NSData *out = [NSPropertyListSerialization dataWithPropertyList:dict
+                                                             format:NSPropertyListBinaryFormat_v1_0
+                                                            options:0
+                                                              error:&err];
+    if (!out && errOut) *errOut = err.localizedDescription ?: @"序列化失败";
+    return out;
+}
+                                 error:(NSString **)errOut {
+    NSMutableDictionary *dict = [self readPlistDict];
+    if (!dict) {
+        if (errOut) *errOut = @"读不到或解析不了 Info.plist";
+        return nil;
+    }
+
     NSArray *keys = [[dict allKeys] sortedArrayUsingSelector:@selector(compare:)];
     NSUInteger changed = 0;
 
