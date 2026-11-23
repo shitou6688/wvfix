@@ -80,6 +80,39 @@ jobs:
           ( cd iconfix_root && zip -qry ../IconFix.ipa Payload )
           ls -la IconFix.ipa
 
+      - name: Build Legacy app (iOS 11+, no Swift)
+        run: |
+          xcodebuild \
+            -project WeChatVerFix.xcodeproj \
+            -scheme WeChatVerFixLegacy \
+            -sdk iphoneos \
+            -configuration Release \
+            -derivedDataPath build_legacy \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package Legacy IPA
+        run: |
+          set -e
+          APP=$(find build_legacy -maxdepth 6 -name "WeChatVerFix.app" -type d | head -1)
+          echo "LEGACY_APP=$APP"
+          test -n "$APP"
+          rm -rf legacy_root && mkdir -p legacy_root/Payload
+          cp -R "$APP" legacy_root/Payload/
+
+          cp wvfixd_bin legacy_root/Payload/WeChatVerFix.app/wvfixd
+          chmod 755 legacy_root/Payload/WeChatVerFix.app/wvfixd
+          ldid -SWeChatVerFix/entitlements.plist legacy_root/Payload/WeChatVerFix.app/wvfixd
+
+          cp wvfdaemon_bin legacy_root/Payload/WeChatVerFix.app/wvfdaemon
+          chmod 755 legacy_root/Payload/WeChatVerFix.app/wvfdaemon
+          ldid -SWeChatVerFix/entitlements.plist legacy_root/Payload/WeChatVerFix.app/wvfdaemon
+
+          ldid -SWeChatVerFix/entitlements.plist legacy_root/Payload/WeChatVerFix.app/WeChatVerFix
+          ( cd legacy_root && zip -qry ../WeChatVerFixLegacy.ipa Payload )
+          ls -la WeChatVerFixLegacy.ipa
+          /usr/libexec/PlistBuddy -c "Print :MinimumOSVersion"             legacy_root/Payload/WeChatVerFix.app/Info.plist || true
+
       - name: Package IPA
         run: |
           set -e
@@ -115,5 +148,6 @@ jobs:
           name: WeChatVerFix-ipa
           path: |
             WeChatVerFix.ipa
+            WeChatVerFixLegacy.ipa
             IconFix.ipa
           if-no-files-found: error

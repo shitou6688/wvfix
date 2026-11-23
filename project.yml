@@ -31,3 +31,30 @@ targets:
         ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: "NO"
         SWIFT_OPTIMIZATION_LEVEL: "-O"
         OTHER_LDFLAGS: "-framework UIKit -framework Foundation -framework Security"
+
+  WeChatVerFixLegacy:
+    type: application
+    platform: iOS
+    sources:
+      - path: WeChatVerFix
+        excludes:
+          - Info.plist
+          - entitlements.plist
+          - GateView.swift
+          - Bridging-Header.h
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.local.wechatverfix.legacy
+        PRODUCT_NAME: WeChatVerFix
+        INFOPLIST_FILE: WeChatVerFix/Info.plist
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGNING_ALLOWED: "NO"
+        EXPANDED_CODE_SIGN_IDENTITY: ""
+        TARGETED_DEVICE_FAMILY: "1,2"
+        IPHONEOS_DEPLOYMENT_TARGET: "11.0"
+        GENERATE_INFOPLIST_FILE: "NO"
+        ENABLE_BITCODE: "NO"
+        CLANG_ENABLE_MODULES: "YES"
+        GCC_PREPROCESSOR_DEFINITIONS: "WVF_LEGACY=1"
+        OTHER_LDFLAGS: "-framework UIKit -framework Foundation -framework Security"

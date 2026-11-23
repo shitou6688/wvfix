@@ -65,7 +65,11 @@
     self.keyField = [[UITextField alloc] initWithFrame:CGRectMake(20, 84, cw - 40, 44)];
     self.keyField.placeholder = @"WVF-XXXXX-XXXXX-XXXXX";
     self.keyField.textAlignment = NSTextAlignmentCenter;
-    self.keyField.font = [UIFont monospacedDigitSystemFontOfSize:14 weight:UIFontWeightMedium];
+    if (@available(iOS 13.0, *)) {
+        self.keyField.font = [UIFont monospacedDigitSystemFontOfSize:14 weight:UIFontWeightMedium];
+    } else {
+        self.keyField.font = [UIFont fontWithName:@"Menlo" size:14] ?: [UIFont boldSystemFontOfSize:14];
+    }
     self.keyField.textColor = G_CLR_TEXT;
     self.keyField.backgroundColor = [UIColor colorWithRed:0.95 green:0.97 blue:0.98 alpha:1.0];
     self.keyField.layer.cornerRadius = 10;

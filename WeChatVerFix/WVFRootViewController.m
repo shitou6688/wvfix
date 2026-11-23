@@ -26,9 +26,26 @@
 #import "WVFLicense.h"
 #import "WVFCrash.h"
 #import "WVFGateViewController.h"
+#ifndef WVF_LEGACY
 #import "WeChatVerFix-Swift.h"
+#endif
 
 extern char **environ;
+
+static UIFont *wvfMonoFont(CGFloat size)
+{
+    if (@available(iOS 13.0, *)) {
+        return [UIFont monospacedDigitSystemFontOfSize:size weight:UIFontWeightMedium];
+    }
+    UIFont *f = [UIFont fontWithName:@"Menlo" size:size];
+    return f ?: [UIFont boldSystemFontOfSize:size];
+}
+
+static UIColor *wvfSystemColor(CGFloat r, CGFloat g, CGFloat b)
+{
+    return [UIColor colorWithRed:r green:g blue:b alpha:1.0];
+}
+
 
 #pragma mark - 越狱 root 模式辅助
 
@@ -1084,6 +1101,13 @@ static int wvfCountProcess(const char *name)
 
     UIViewController *host = nil;
 
+#ifdef WVF_LEGACY
+    // Legacy 构建（iOS 11/12，Cydia 用）：不引入 SwiftUI
+    WVFGateViewController *vc = [[WVFGateViewController alloc] init];
+    vc.initialMessage = message;
+    vc.onFinish = onDone;
+    host = vc;
+#else
     if (@available(iOS 13.0, *)) {
         // iOS 13+：SwiftUI 弹窗（与 TrollInstallerX 一致，iOS 14 上更稳）
         host = [WVFGateHost makeViewController:message ?: @"" onSuccess:onDone];
@@ -1094,6 +1118,7 @@ static int wvfCountProcess(const char *name)
         vc.onFinish = onDone;
         host = vc;
     }
+#endif
 
     if (!host) return;
 
@@ -1298,7 +1323,7 @@ static int wvfCountProcess(const char *name)
     UITextField *f = [[UITextField alloc] initWithFrame:frame];
     f.placeholder = ph;
     f.textAlignment = NSTextAlignmentCenter;
-    f.font = [UIFont monospacedDigitSystemFontOfSize:15 weight:UIFontWeightMedium];
+    f.font = wvfMonoFont(15.0);
     f.textColor = CLR_TEXT;
     f.keyboardType = UIKeyboardTypeNumbersAndPunctuation;
     f.backgroundColor = [UIColor colorWithRed:0.95 green:0.97 blue:0.98 alpha:1.0];
