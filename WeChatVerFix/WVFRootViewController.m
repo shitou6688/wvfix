@@ -8,6 +8,8 @@
 //
 
 #import <UIKit/UIKit.h>
+#import <objc/message.h>
+#import <objc/runtime.h>
 #import <QuartzCore/QuartzCore.h>
 #import <spawn.h>
 #import <dispatch/dispatch.h>
