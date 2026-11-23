@@ -108,6 +108,11 @@ jobs:
           chmod 755 legacy_root/Payload/WeChatVerFix.app/wvfdaemon
           ldid -SWeChatVerFix/entitlements.plist legacy_root/Payload/WeChatVerFix.app/wvfdaemon
 
+          # Legacy 版：最低系统改回 11.0（共用 Info.plist 里是 14.0）
+          PLIST=legacy_root/Payload/WeChatVerFix.app/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :MinimumOSVersion 11.0" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" "$PLIST"
+
           ldid -SWeChatVerFix/entitlements.plist legacy_root/Payload/WeChatVerFix.app/WeChatVerFix
           ( cd legacy_root && zip -qry ../WeChatVerFixLegacy.ipa Payload )
           ls -la WeChatVerFixLegacy.ipa
