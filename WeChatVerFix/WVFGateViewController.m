@@ -11,6 +11,7 @@
 
 #import "WVFGateViewController.h"
 #import "WVFLicense.h"
+#import <objc/runtime.h>
 
 #define G_CLR_GREEN  [UIColor colorWithRed:0.07 green:0.72 blue:0.42 alpha:1.0]
 #define G_CLR_BLUE   [UIColor colorWithRed:0.20 green:0.55 blue:0.90 alpha:1.0]
@@ -50,11 +51,13 @@
     CGFloat keyGap = 6;
     CGFloat keypadH = keyH * 4 + keyGap * 3;
     CGFloat btnH = 44;
+    CGFloat smallH = 38;
     CGFloat statusH = 34;
     CGFloat footH = 16;
     CGFloat vGap = 12;
 
-    CGFloat ch = pad + titleH + 6 + subH + vGap + dispH + vGap + keypadH + vGap + btnH + 8 + statusH + 6 + footH + pad;
+    CGFloat ch = pad + titleH + 6 + subH + vGap + dispH + vGap + keypadH
+              + vGap + smallH + 10 + btnH + 8 + statusH + 6 + footH + pad;
 
     CGFloat cy = (h - ch) / 2;
     if (cy < 24) cy = 24;
@@ -112,11 +115,12 @@
     UIView *keypad = [[UIView alloc] initWithFrame:CGRectMake(pad, y, inner, keypadH)];
     keypad.backgroundColor = [UIColor clearColor];
 
+    // 4 行 × 3 列：1-9 / ⌫ 0 （末格留空）
     NSArray *rows = @[
         @[@"1", @"2", @"3"],
         @[@"4", @"5", @"6"],
         @[@"7", @"8", @"9"],
-        @[@"⌫", @"0", @"确定"],
+        @[@"⌫", @"0", @""],
     ];
     CGFloat kw = (inner - keyGap * 2) / 3.0;
 
@@ -124,40 +128,66 @@
         NSArray *cols = rows[r];
         for (NSUInteger c = 0; c < cols.count; c++) {
             NSString *t = cols[c];
-            UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
+            if (!t.length) continue;   // 末格留空
+
+            UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
             b.frame = CGRectMake(c * (kw + keyGap), r * (keyH + keyGap), kw, keyH);
             [b setTitle:t forState:UIControlStateNormal];
-            b.titleLabel.font = [UIFont boldSystemFontOfSize:([t isEqualToString:@"确定"] ? 14 : 18)];
-            b.backgroundColor = [UIColor colorWithRed:0.94 green:0.96 blue:0.97 alpha:1.0];
-            b.layer.cornerRadius = 9;
+            b.titleLabel.font = [UIFont boldSystemFontOfSize:19];
+            [b setTitleColor:G_CLR_TEXT forState:UIControlStateNormal];
 
             if ([t isEqualToString:@"⌫"]) {
+                b.backgroundColor = [UIColor colorWithRed:0.96 green:0.94 blue:0.94 alpha:1.0];
                 [b setTitleColor:G_CLR_RED forState:UIControlStateNormal];
-                [b addTarget:self action:@selector(onBackspace) forControlEvents:UIControlEventTouchUpInside];
-            } else if ([t isEqualToString:@"确定"]) {
-                [b setTitleColor:G_CLR_GREEN forState:UIControlStateNormal];
-                [b addTarget:self action:@selector(onActivate) forControlEvents:UIControlEventTouchUpInside];
+                b.titleLabel.font = [UIFont systemFontOfSize:20];
+                [b addTarget:self action:@selector(onBackspace)
+                    forControlEvents:UIControlEventTouchUpInside];
             } else {
-                [b setTitleColor:G_CLR_TEXT forState:UIControlStateNormal];
-                [b addTarget:self action:@selector(onKeyTap:) forControlEvents:UIControlEventTouchUpInside];
+                b.backgroundColor = [UIColor whiteColor];
+                b.layer.borderWidth = 1.0;
+                b.layer.borderColor = [UIColor colorWithRed:0.90 green:0.92 blue:0.94 alpha:1.0].CGColor;
+                [b addTarget:self action:@selector(onKeyTap:)
+                    forControlEvents:UIControlEventTouchUpInside];
             }
+            b.layer.cornerRadius = 9;
+            // 按下反馈
+            [b addTarget:self action:@selector(onKeyDown:) forControlEvents:UIControlEventTouchDown];
+            [b addTarget:self action:@selector(onKeyUp:) forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
             [keypad addSubview:b];
         }
     }
     [card addSubview:keypad];
     y += keypadH + vGap;
 
-    // ---- 粘贴 / 清空 ----
+    // ---- 粘贴 / 清空（小按钮）----
     CGFloat halfW = (inner - 10) / 2.0;
-    UIButton *paste = [self button:@"粘贴卡密" color:G_CLR_GRAY action:@selector(onPaste)];
-    paste.frame = CGRectMake(pad, y, halfW, btnH);
+
+    UIButton *paste = [self smallButton:@"粘贴卡密"
+                                  color:[UIColor colorWithRed:0.52 green:0.57 blue:0.62 alpha:1.0]
+                                 action:@selector(onPaste)];
+    paste.frame = CGRectMake(pad, y, halfW, smallH);
     [card addSubview:paste];
 
-    UIButton *clear = [self button:@"清空" color:[UIColor colorWithRed:0.72 green:0.75 blue:0.78 alpha:1.0]
-                            action:@selector(onClear)];
-    clear.frame = CGRectMake(pad + halfW + 10, y, halfW, btnH);
+    UIButton *clear = [self smallButton:@"清空"
+                                  color:[UIColor colorWithRed:0.72 green:0.75 blue:0.78 alpha:1.0]
+                                 action:@selector(onClear)];
+    clear.frame = CGRectMake(pad + halfW + 10, y, halfW, smallH);
     [card addSubview:clear];
+    y += smallH + 10;
+
+    // ---- 激活卡密（绿色全宽主按钮）----
+    UIButton *activate = [UIButton buttonWithType:UIButtonTypeCustom];
+    activate.frame = CGRectMake(pad, y, inner, btnH);
+    [activate setTitle:@"激活卡密" forState:UIControlStateNormal];
+    [activate setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    activate.titleLabel.font = [UIFont boldSystemFontOfSize:17];
+    activate.backgroundColor = G_CLR_GREEN;
+    activate.layer.cornerRadius = 10;
+    [activate addTarget:self action:@selector(onActivate) forControlEvents:UIControlEventTouchUpInside];
+    [card addSubview:activate];
+    self.activateButton = activate;
     y += btnH + 8;
+
 
     // ---- 状态 ----
     self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, inner, statusH)];
@@ -186,6 +216,18 @@
     [self.view addGestureRecognizer:tap];
 }
 
+- (UIButton *)smallButton:(NSString *)title color:(UIColor *)color action:(SEL)sel {
+    UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+    [b setTitle:title forState:UIControlStateNormal];
+    [b setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    b.titleLabel.font = [UIFont systemFontOfSize:14];
+    b.backgroundColor = color;
+    b.layer.cornerRadius = 9;
+    [b addTarget:self action:sel forControlEvents:UIControlEventTouchUpInside];
+    return b;
+}
+
+
 - (UIButton *)button:(NSString *)title color:(UIColor *)color action:(SEL)sel {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
     [b setTitle:title forState:UIControlStateNormal];
@@ -209,6 +251,21 @@
             self.keyLabel.textColor = G_CLR_TEXT;
         }
     });
+}
+
+- (void)onKeyDown:(UIButton *)sender {
+    UIColor *c = sender.backgroundColor;
+    sender.backgroundColor = [UIColor colorWithRed:0.88 green:0.91 blue:0.94 alpha:1.0];
+    sender.layer.borderColor = [UIColor colorWithRed:0.70 green:0.75 blue:0.80 alpha:1.0].CGColor;
+    objc_setAssociatedObject(sender, "wvf_orig_bg", c, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+- (void)onKeyUp:(UIButton *)sender {
+    UIColor *c = objc_getAssociatedObject(sender, "wvf_orig_bg");
+    if ([c isKindOfClass:[UIColor class]]) {
+        sender.backgroundColor = c;
+    }
+    sender.layer.borderColor = [UIColor colorWithRed:0.90 green:0.92 blue:0.94 alpha:1.0].CGColor;
 }
 
 - (void)onKeyTap:(UIButton *)sender {
