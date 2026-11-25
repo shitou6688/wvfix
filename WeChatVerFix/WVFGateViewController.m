@@ -1,10 +1,12 @@
 //
 //  WVFGateViewController.m
-//  激活授权弹窗
+//  激活授权弹窗 —— 纯 UIKit + 内置数字键盘
 //
-//  关键：这是一个真正的 UIViewController，由主界面 present 出来，
-//  因此系统键盘有完整的 responder chain（iOS 14 上裸 UIView 加在 UIWindow
-//  上唤键盘会被杀掉，这里用模态 VC 规避）。
+//  设计原则（针对"点输入框闪退/无响应"）：
+//  1. 全程不唤起系统键盘 —— 用自绘键盘，彻底避开键盘相关崩溃
+//  2. 卡密显示用 UILabel（不是 UITextField），不可能触发 firstResponder
+//  3. 真正的 UIViewController 由主界面 present，responder chain 完整
+//  4. 所有 UI 构建在 viewDidLoad 一次完成，无动态增删视图
 //
 
 #import "WVFGateViewController.h"
@@ -17,11 +19,12 @@
 #define G_CLR_TEXT   [UIColor colorWithRed:0.13 green:0.16 blue:0.20 alpha:1.0]
 #define G_CLR_SUB    [UIColor colorWithRed:0.47 green:0.52 blue:0.57 alpha:1.0]
 
-@interface WVFGateViewController () <UITextFieldDelegate>
+@interface WVFGateViewController ()
 @property (nonatomic, strong) UIView *card;
-@property (nonatomic, strong) UITextField *keyField;
+@property (nonatomic, strong) UILabel *keyLabel;
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UIButton *activateButton;
+@property (nonatomic, strong) NSMutableString *input;
 @end
 
 @implementation WVFGateViewController
@@ -30,90 +33,153 @@
     [super viewDidLoad];
 
     self.view.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
+    self.input = [NSMutableString string];
 
     CGFloat w = self.view.bounds.size.width;
-    CGFloat cw = w - 56;
-    if (cw > 330) cw = 330;
+    CGFloat h = self.view.bounds.size.height;
+    CGFloat cw = w - 48;
+    if (cw > 340) cw = 340;
 
-    CGFloat ch = 306;
-    UIView *card = [[UIView alloc] initWithFrame:
-                    CGRectMake((w - cw) / 2,
-                               (self.view.bounds.size.height - ch) / 2, cw, ch)];
+    // ---- 卡片尺寸 ----
+    CGFloat pad = 20;
+    CGFloat inner = cw - pad * 2;
+    CGFloat titleH = 26;
+    CGFloat subH = 18;
+    CGFloat dispH = 44;
+    CGFloat keyH = 44;
+    CGFloat keyGap = 6;
+    CGFloat keypadH = keyH * 4 + keyGap * 3;
+    CGFloat btnH = 44;
+    CGFloat statusH = 34;
+    CGFloat footH = 16;
+    CGFloat vGap = 12;
+
+    CGFloat ch = pad + titleH + 6 + subH + vGap + dispH + vGap + keypadH + vGap + btnH + 8 + statusH + 6 + footH + pad;
+
+    CGFloat cy = (h - ch) / 2;
+    if (cy < 24) cy = 24;
+    if (cy + ch > h - 24) cy = h - ch - 24;
+    if (cy < 0) cy = 0;
+
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake((w - cw) / 2, cy, cw, ch)];
     card.backgroundColor = [UIColor whiteColor];
     card.layer.cornerRadius = 18;
     card.layer.shadowColor = [UIColor blackColor].CGColor;
     card.layer.shadowOpacity = 0.22;
-    card.layer.shadowRadius = 20;
-    card.layer.shadowOffset = CGSizeMake(0, 8);
+    card.layer.shadowRadius = 18;
+    card.layer.shadowOffset = CGSizeMake(0, 6);
     [self.view addSubview:card];
     self.card = card;
 
-    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(20, 24, cw - 40, 26)];
+    CGFloat y = pad;
+
+    // ---- 标题 ----
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, inner, titleH)];
     title.text = @"激活授权";
     title.textAlignment = NSTextAlignmentCenter;
     title.font = [UIFont boldSystemFontOfSize:19];
     title.textColor = G_CLR_TEXT;
     [card addSubview:title];
+    y += titleH + 6;
 
-    UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(20, 52, cw - 40, 18)];
+    // ---- 副标题 ----
+    UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, inner, subH)];
     sub.text = @"一机一码，激活后可在本机使用";
     sub.textAlignment = NSTextAlignmentCenter;
     sub.font = [UIFont systemFontOfSize:12];
     sub.textColor = G_CLR_SUB;
     [card addSubview:sub];
+    y += subH + vGap;
 
-    self.keyField = [[UITextField alloc] initWithFrame:CGRectMake(20, 84, cw - 40, 44)];
-    self.keyField.placeholder = @"WVF-XXXXX-XXXXX-XXXXX";
-    self.keyField.textAlignment = NSTextAlignmentCenter;
-    if (@available(iOS 13.0, *)) {
-        self.keyField.font = [UIFont monospacedDigitSystemFontOfSize:14 weight:UIFontWeightMedium];
-    } else {
-        self.keyField.font = [UIFont fontWithName:@"Menlo" size:14] ?: [UIFont boldSystemFontOfSize:14];
+    // ---- 卡密显示（UILabel，不可能触发键盘）----
+    UILabel *disp = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, inner, dispH)];
+    disp.backgroundColor = [UIColor colorWithRed:0.95 green:0.97 blue:0.98 alpha:1.0];
+    disp.layer.cornerRadius = 10;
+    disp.layer.borderWidth = 1;
+    disp.layer.borderColor = [UIColor colorWithRed:0.88 green:0.91 blue:0.93 alpha:1].CGColor;
+    disp.clipsToBounds = YES;
+    disp.textAlignment = NSTextAlignmentCenter;
+    disp.textColor = G_CLR_TEXT;
+    disp.font = [UIFont monospacedDigitSystemFontOfSize:16 weight:UIFontWeightMedium];
+    disp.text = @"";
+    disp.adjustsFontSizeToFitWidth = YES;
+    disp.minimumScaleFactor = 0.6;
+    [card addSubview:disp];
+    self.keyLabel = disp;
+    y += dispH + vGap;
+
+    // ---- 内置数字键盘（3×4）----
+    UIView *keypad = [[UIView alloc] initWithFrame:CGRectMake(pad, y, inner, keypadH)];
+    keypad.backgroundColor = [UIColor clearColor];
+
+    NSArray *rows = @[
+        @[@"1", @"2", @"3"],
+        @[@"4", @"5", @"6"],
+        @[@"7", @"8", @"9"],
+        @[@"⌫", @"0", @"确定"],
+    ];
+    CGFloat kw = (inner - keyGap * 2) / 3.0;
+
+    for (NSUInteger r = 0; r < rows.count; r++) {
+        NSArray *cols = rows[r];
+        for (NSUInteger c = 0; c < cols.count; c++) {
+            NSString *t = cols[c];
+            UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
+            b.frame = CGRectMake(c * (kw + keyGap), r * (keyH + keyGap), kw, keyH);
+            [b setTitle:t forState:UIControlStateNormal];
+            b.titleLabel.font = [UIFont boldSystemFontOfSize:([t isEqualToString:@"确定"] ? 14 : 18)];
+            b.backgroundColor = [UIColor colorWithRed:0.94 green:0.96 blue:0.97 alpha:1.0];
+            b.layer.cornerRadius = 9;
+
+            if ([t isEqualToString:@"⌫"]) {
+                [b setTitleColor:G_CLR_RED forState:UIControlStateNormal];
+                [b addTarget:self action:@selector(onBackspace) forControlEvents:UIControlEventTouchUpInside];
+            } else if ([t isEqualToString:@"确定"]) {
+                [b setTitleColor:G_CLR_GREEN forState:UIControlStateNormal];
+                [b addTarget:self action:@selector(onActivate) forControlEvents:UIControlEventTouchUpInside];
+            } else {
+                [b setTitleColor:G_CLR_TEXT forState:UIControlStateNormal];
+                [b addTarget:self action:@selector(onKeyTap:) forControlEvents:UIControlEventTouchUpInside];
+            }
+            [keypad addSubview:b];
+        }
     }
-    self.keyField.textColor = G_CLR_TEXT;
-    self.keyField.backgroundColor = [UIColor colorWithRed:0.95 green:0.97 blue:0.98 alpha:1.0];
-    self.keyField.layer.cornerRadius = 10;
-    self.keyField.layer.borderWidth = 1;
-    self.keyField.layer.borderColor = [UIColor colorWithRed:0.88 green:0.91 blue:0.93 alpha:1].CGColor;
-    self.keyField.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters;
-    self.keyField.autocorrectionType = UITextAutocorrectionTypeNo;
-    self.keyField.spellCheckingType = UITextSpellCheckingTypeNo;
-    self.keyField.returnKeyType = UIReturnKeyDone;
-    self.keyField.delegate = self;
-    [card addSubview:self.keyField];
+    [card addSubview:keypad];
+    y += keypadH + vGap;
 
-    CGFloat halfW = (cw - 40 - 10) / 2.0;
+    // ---- 粘贴 / 清空 ----
+    CGFloat halfW = (inner - 10) / 2.0;
     UIButton *paste = [self button:@"粘贴卡密" color:G_CLR_GRAY action:@selector(onPaste)];
-    paste.frame = CGRectMake(20, 138, halfW, 40);
-    paste.titleLabel.font = [UIFont boldSystemFontOfSize:14];
+    paste.frame = CGRectMake(pad, y, halfW, btnH);
     [card addSubview:paste];
 
-    self.activateButton = [self button:@"激活" color:G_CLR_BLUE action:@selector(onActivate)];
-    self.activateButton.frame = CGRectMake(20 + halfW + 10, 138, halfW, 40);
-    self.activateButton.titleLabel.font = [UIFont boldSystemFontOfSize:16];
-    [card addSubview:self.activateButton];
+    UIButton *clear = [self button:@"清空" color:[UIColor colorWithRed:0.72 green:0.75 blue:0.78 alpha:1.0]
+                            action:@selector(onClear)];
+    clear.frame = CGRectMake(pad + halfW + 10, y, halfW, btnH);
+    [card addSubview:clear];
+    y += btnH + 8;
 
-    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 190, cw - 40, 34)];
-    self.statusLabel.text = self.initialMessage ?: @"";
+    // ---- 状态 ----
+    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, inner, statusH)];
+    self.statusLabel.text = self.initialMessage ?: @"请输入卡密";
     self.statusLabel.numberOfLines = 2;
     self.statusLabel.textAlignment = NSTextAlignmentCenter;
     self.statusLabel.font = [UIFont systemFontOfSize:11.5];
     self.statusLabel.textColor = G_CLR_RED;
     [card addSubview:self.statusLabel];
+    y += statusH + 6;
 
-    UILabel *foot = [[UILabel alloc] initWithFrame:CGRectMake(20, 232, cw - 40, 48)];
-    foot.text = @"卡密可先在微信里复制，再点「粘贴卡密」\n激活成功后本页自动关闭";
-    foot.numberOfLines = 2;
+    // ---- 底部提示 ----
+    UILabel *foot = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, inner, footH)];
+    foot.text = @"可直接「粘贴卡密」，或用上方键盘输入";
     foot.textAlignment = NSTextAlignmentCenter;
     foot.font = [UIFont systemFontOfSize:10.5];
     foot.textColor = G_CLR_SUB;
+    foot.adjustsFontSizeToFitWidth = YES;
+    foot.minimumScaleFactor = 0.8;
     [card addSubview:foot];
 
-    // 长按「激活」按钮 → 网络诊断（把服务器返回原文显示出来）
-    self.activateButton.userInteractionEnabled = YES;
-    [self.activateButton addGestureRecognizer:
-        [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(onDiagnose)]];
-
+    // 点击空白收起（无键盘时仅作视觉反馈）
     UITapGestureRecognizer *tap =
         [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onTapBlank)];
     tap.cancelsTouchesInView = NO;
@@ -131,9 +197,46 @@
     return b;
 }
 
-- (void)onTapBlank {
-    [self.view endEditing:YES];
+#pragma mark - 输入
+
+- (void)refreshKeyLabel {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.keyLabel.text = self.input.length ? self.input : @"";
+        if (!self.input.length) {
+            self.keyLabel.textColor = G_CLR_SUB;
+            self.keyLabel.text = @"请用下方键盘输入";
+        } else {
+            self.keyLabel.textColor = G_CLR_TEXT;
+        }
+    });
 }
+
+- (void)onKeyTap:(UIButton *)sender {
+    NSString *t = sender.currentTitle ?: @"";
+    if (!t.length) return;
+    if (self.input.length >= 32) return;
+    [self.input appendString:t];
+    [self setStatusText:@"" isError:NO];
+    [self refreshKeyLabel];
+}
+
+- (void)onBackspace {
+    if (!self.input.length) return;
+    [self.input deleteCharactersInRange:NSMakeRange(self.input.length - 1, 1)];
+    [self refreshKeyLabel];
+}
+
+- (void)onClear {
+    [self.input setString:@""];
+    [self setStatusText:@"已清空" isError:NO];
+    [self refreshKeyLabel];
+}
+
+- (void)onTapBlank {
+    // 无系统键盘，无需收起；保留手势避免点击穿透
+}
+
+#pragma mark - 操作
 
 - (void)setStatusText:(NSString *)text isError:(BOOL)isError {
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -142,44 +245,29 @@
     });
 }
 
-- (void)onDiagnose {
-    [self setStatusText:@"正在诊断服务器…" isError:NO];
-
-    __weak typeof(self) weakSelf = self;
-    [[WVFLicense shared] diagnoseWithCompletion:^(NSString *text) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            UIAlertController *ac = [UIAlertController
-                alertControllerWithTitle:@"服务器诊断"
-                                 message:text
-                          preferredStyle:UIAlertControllerStyleAlert];
-            [ac addAction:[UIAlertAction actionWithTitle:@"好"
-                                                   style:UIAlertActionStyleDefault handler:nil]];
-            [weakSelf presentViewController:ac animated:YES completion:nil];
-            [weakSelf setStatusText:@"诊断完成" isError:NO];
-        });
-    }];
-}
-
 - (void)onPaste {
     NSString *s = [UIPasteboard generalPasteboard].string ?: @"";
     s = [s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (!s.length) {
+    // 只保留数字和字母，去掉 WVF- 之类的分隔符
+    NSMutableString *clean = [NSMutableString string];
+    for (NSUInteger i = 0; i < s.length; i++) {
+        unichar c = [s characterAtIndex:i];
+        if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+            [clean appendFormat:@"%C", c];
+        }
+    }
+    if (!clean.length) {
         [self setStatusText:@"剪贴板是空的，请先复制卡密" isError:YES];
         return;
     }
-    self.keyField.text = [s uppercaseString];
-    [self setStatusText:@"已粘贴，点「激活」" isError:NO];
-}
-
-- (BOOL)textFieldShouldReturn:(UITextField *)textField {
-    [textField resignFirstResponder];
-    [self onActivate];
-    return YES;
+    [self.input setString:[clean uppercaseString]];
+    [self refreshKeyLabel];
+    [self setStatusText:@"已粘贴，点「确定」" isError:NO];
 }
 
 - (void)onActivate {
-    NSString *k = [self.keyField.text stringByTrimmingCharactersInSet:
-                   [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSString *k = [self.input copy];
+    k = [k stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (!k.length) {
         [self setStatusText:@"请先输入或粘贴卡密" isError:YES];
         return;
@@ -187,7 +275,6 @@
 
     self.activateButton.enabled = NO;
     [self setStatusText:@"正在验证…" isError:NO];
-    [self.view endEditing:YES];
 
     __weak typeof(self) weakSelf = self;
     [[WVFLicense shared] activateWithKey:k completion:^(BOOL ok, NSString *msg) {

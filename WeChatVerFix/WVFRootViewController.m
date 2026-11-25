@@ -29,7 +29,6 @@
 #import "WVFCrash.h"
 #import "WVFGateViewController.h"
 #ifndef WVF_LEGACY
-#import "WeChatVerFix-Swift.h"
 #endif
 
 extern char **environ;
@@ -263,7 +262,7 @@ static int spawnRootFull(NSString *path, NSArray<NSString *> *args,
 @property (nonatomic, copy)   NSString *appPath;
 @property (nonatomic, copy)   NSString *currentShortVer;
 @property (nonatomic, copy)   NSString *currentBundleVer;
-@property (nonatomic, strong) WVFGateViewController *gateVC;
+@property (nonatomic, strong) UIViewController *gateVC;
 @end
 
 static NSString *wvfSafeWorkDir(void)
@@ -1101,32 +1100,18 @@ static int wvfCountProcess(const char *name)
         [weakSelf setResult:@"✓ 激活成功" color:CLR_GREEN];
     };
 
-    UIViewController *host = nil;
-
-#ifdef WVF_LEGACY
-    // Legacy 构建（iOS 11/12，Cydia 用）：不引入 SwiftUI
+    // 统一使用 UIKit 弹窗（内置数字键盘）。
+    // SwiftUI 版在部分 iOS 14 设备上点输入框会闪退，已弃用。
     WVFGateViewController *vc = [[WVFGateViewController alloc] init];
     vc.initialMessage = message;
     vc.onFinish = onDone;
-    host = vc;
-#else
-    if (@available(iOS 13.0, *)) {
-        // iOS 13+：SwiftUI 弹窗（与 TrollInstallerX 一致，iOS 14 上更稳）
-        host = [WVFGateHost makeViewController:message ?: @"" onSuccess:onDone];
-    } else {
-        // iOS 12 及以下：回退 UIKit 弹窗
-        WVFGateViewController *vc = [[WVFGateViewController alloc] init];
-        vc.initialMessage = message;
-        vc.onFinish = onDone;
-        host = vc;
-    }
-#endif
+    UIViewController *host = vc;
 
     if (!host) return;
 
     host.modalPresentationStyle = UIModalPresentationOverFullScreen;
     host.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
-    self.gateVC = (WVFGateViewController *)host;
+    self.gateVC = host;
 
     @try {
         [self presentViewController:host animated:YES completion:nil];
@@ -1142,10 +1127,14 @@ static int wvfCountProcess(const char *name)
 
 
 - (void)hideGate {
-    if (!self.gateVC) return;
-    WVFGateViewController *vc = self.gateVC;
+    UIViewController *vc = self.gateVC;
+    if (!vc) return;
     self.gateVC = nil;
-    [vc dismissViewControllerAnimated:YES completion:nil];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (vc.presentingViewController) {
+            [vc dismissViewControllerAnimated:YES completion:nil];
+        }
+    });
 }
 
 

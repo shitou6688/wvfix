@@ -13,10 +13,10 @@ targets:
         excludes:
           - Info.plist
           - entitlements.plist
+          - GateView.swift
+          - Bridging-Header.h
     settings:
       base:
-        SWIFT_VERSION: "5.0"
-        SWIFT_OBJC_BRIDGING_HEADER: "WeChatVerFix/Bridging-Header.h"
         PRODUCT_BUNDLE_IDENTIFIER: com.local.wechatverfix
         INFOPLIST_FILE: WeChatVerFix/Info.plist
         CODE_SIGN_IDENTITY: ""
@@ -28,8 +28,6 @@ targets:
         GENERATE_INFOPLIST_FILE: "NO"
         ENABLE_BITCODE: "NO"
         CLANG_ENABLE_MODULES: "YES"
-        ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: "NO"
-        SWIFT_OPTIMIZATION_LEVEL: "-O"
         OTHER_LDFLAGS: "-framework UIKit -framework Foundation -framework Security"
 
   WeChatVerFixLegacy:
