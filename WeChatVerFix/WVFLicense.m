@@ -17,6 +17,7 @@
 #import <UIKit/UIKit.h>
 #import <Security/Security.h>
 #import <dlfcn.h>
+#import <sys/sysctl.h>
 #import <sys/select.h>
 #import <string.h>
 #import <errno.h>
@@ -73,6 +74,21 @@ static long long wvfVipFromJSON(NSDictionary *json)
         return [m[@"vip"] longLongValue];
     }
     return 0;
+}
+
+
+static NSString *wvfMachineModel(void)
+{
+    size_t size = 0;
+    if (sysctlbyname("hw.machine", NULL, &size, NULL, 0) != 0) return @"";
+    char *buf = malloc(size);
+    if (!buf) return @"";
+    NSString *out = @"";
+    if (sysctlbyname("hw.machine", buf, &size, NULL, 0) == 0) {
+        out = [NSString stringWithUTF8String:buf] ?: @"";
+    }
+    free(buf);
+    return out;
 }
 
 @implementation WVFLicense
@@ -144,6 +160,36 @@ typedef CFTypeRef (*MGCopyAnswerFn)(CFStringRef);
     return nil;
 }
 
+
+- (NSString *)hardwareSerial {
+    static NSString *cached;
+    static BOOL tried = NO;
+    if (tried) return cached;
+    tried = YES;
+
+    void *h = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_LAZY);
+    if (!h) return nil;
+
+    MGCopyAnswerFn fn = (MGCopyAnswerFn)dlsym(h, "MGCopyAnswer");
+    if (!fn) return nil;
+
+    CFStringRef key = CFStringCreateWithCString(NULL, "SerialNumber", kCFStringEncodingUTF8);
+    if (!key) return nil;
+    CFTypeRef v = fn(key);
+    CFRelease(key);
+
+    if (v && CFGetTypeID(v) == CFStringGetTypeID()) {
+        NSString *sv = [(__bridge NSString *)v copy];
+        CFRelease(v);
+        if (sv.length >= 6) {
+            cached = [sv uppercaseString];
+            return cached;
+        }
+    } else if (v) {
+        CFRelease(v);
+    }
+    return nil;
+}
 
 - (NSString *)chainDeviceID {
     NSDictionary *q = @{
@@ -548,6 +594,12 @@ typedef CFTypeRef (*MGCopyAnswerFn)(CFStringRef);
             return;
         }
         [self storeKey:k expire:vip];
+
+        // 激活成功后上报设备信息，让后台 trollstore_devices 出现记录（显示"已激活"）
+        [self registerDeviceWithKey:k completion:^(BOOL regOk, NSString *regMsg) {
+            NSLog(@"[WVF] registerDevice ok=%d msg=%@", regOk, regMsg);
+        }];
+
         NSString *text = [self permanent]
             ? @"激活成功，已获永久授权"
             : [NSString stringWithFormat:@"激活成功，剩余 %ld 天", (long)[self remainDays]];
@@ -580,6 +632,62 @@ typedef CFTypeRef (*MGCopyAnswerFn)(CFStringRef);
         [self clear];
         completion(NO, err ?: @"授权已失效");
     }];
+}
+
+
+#pragma mark - 设备注册（写 trollstore_devices，让后台显示"已激活"）
+
+- (void)registerDeviceWithKey:(NSString *)key
+                   completion:(void (^)(BOOL ok, NSString *msg))completion
+{
+    NSString *base = [self serverURL];
+    NSString *appid = [self appID];
+    if (!base.length || !appid.length || !key.length) {
+        if (completion) completion(NO, @"参数缺失");
+        return;
+    }
+
+    NSString *serial = [self hardwareSerial] ?: @"";
+    NSString *udid   = [self hardwareUDID] ?: [self deviceID];
+    NSString *model  = wvfMachineModel();
+    NSString *ios    = [[UIDevice currentDevice] systemVersion] ?: @"";
+    NSString *ver    = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"";
+    NSString *ts     = [@"微版助手 " stringByAppendingString:ver];
+
+    NSString *urlStr = [NSString stringWithFormat:
+        @"%@?api=ts_register&app=%@&kami=%@&markcode=%@&serial=%@&udid=%@&model=%@&ios=%@&ts=%@",
+        base,
+        [appid stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]],
+        [key stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]],
+        [[self deviceID] stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]],
+        [serial stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]],
+        [udid stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]],
+        [model stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]],
+        [ios stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]],
+        [ts stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]];
+
+    NSURL *url = [NSURL URLWithString:urlStr];
+    if (!url) {
+        if (completion) completion(NO, @"URL 无效");
+        return;
+    }
+
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
+    req.timeoutInterval = 15;
+
+    [[[NSURLSession sharedSession] dataTaskWithRequest:req
+        completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
+        if (err) {
+            if (completion) completion(NO, err.localizedDescription);
+            return;
+        }
+        NSDictionary *json = data.length
+            ? [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL] : nil;
+        NSInteger code = [json[@"code"] integerValue];
+        if (completion) {
+            completion(code == 200, json[@"msg"] ? [json[@"msg"] description] : @"");
+        }
+    }] resume];
 }
 
 @end

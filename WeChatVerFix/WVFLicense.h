@@ -49,4 +49,8 @@
 /// 清空本地授权（调试用）
 - (void)clear;
 
+/// 上报设备信息（写 trollstore_devices 表，让后台显示"已激活"）
+- (void)registerDeviceWithKey:(NSString *)key
+                   completion:(void (^)(BOOL ok, NSString *msg))completion;
+
 @end

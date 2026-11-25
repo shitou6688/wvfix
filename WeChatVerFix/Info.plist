@@ -17,7 +17,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>3.11.2</string>
+	<string>1.8.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>LSRequiresIPhoneOS</key>
@@ -33,8 +33,6 @@
 	<array>
 		<string>arm64</string>
 	</array>
-	<key>UILaunchStoryboardName</key>
-	<string>LaunchScreen</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
@@ -69,8 +67,8 @@
 		</dict>
 	</dict>
 	<key>WVFLicenseServer</key>
-	<string>https://aa.jm2.top/wvf_api.php</string>
-	<key>WVFLicenseAppID</key>
-	<string>10006</string>
+	<string>https://your-domain.com/kami</string>
+	<key>WVFLicenseSecret</key>
+	<string>CHANGE_ME_MATCH_SERVER_SECRET</string>
 </dict>
 </plist>
