@@ -637,6 +637,37 @@ typedef CFTypeRef (*MGCopyAnswerFn)(CFStringRef);
 
 #pragma mark - 设备注册（写 trollstore_devices，让后台显示"已激活"）
 
+
+#pragma mark - 网络预热（触发系统"允许无线数据"权限弹窗）
+
+- (void)warmUpNetwork
+{
+    NSString *base = [self serverURL];
+    if (!base.length) return;
+
+    // 只发一个 HEAD，不返回业务数据，代价最小
+    NSURL *url = [NSURL URLWithString:[base stringByAppendingString:@"?diag=1"]];
+    if (!url) return;
+
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
+    req.timeoutInterval = 8;
+    req.HTTPMethod = @"HEAD";
+    req.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+
+    // 用 dataTask 而非 HEAD-only API，确保走完整的网络栈（才会触发权限判定）
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession]
+        dataTaskWithRequest:req
+          completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
+            if (err) {
+                NSLog(@"[WVF] warmUp err=%ld %@", (long)err.code, err.localizedDescription);
+            } else {
+                NSLog(@"[WVF] warmUp ok, status=%ld",
+                      (long)((NSHTTPURLResponse *)resp).statusCode);
+            }
+          }];
+    [task resume];
+}
+
 - (void)registerDeviceWithKey:(NSString *)key
                    completion:(void (^)(BOOL ok, NSString *msg))completion
 {

@@ -49,6 +49,9 @@
 /// 清空本地授权（调试用）
 - (void)clear;
 
+/// 启动时预热网络：发一个极轻量请求，让系统"允许无线数据"弹窗在启动瞬间出现
+- (void)warmUpNetwork;
+
 /// 上报设备信息（写 trollstore_devices 表，让后台显示"已激活"）
 - (void)registerDeviceWithKey:(NSString *)key
                    completion:(void (^)(BOOL ok, NSString *msg))completion;
