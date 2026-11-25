@@ -51,13 +51,12 @@
     CGFloat keyGap = 6;
     CGFloat keypadH = keyH * 4 + keyGap * 3;
     CGFloat btnH = 44;
-    CGFloat smallH = 38;
     CGFloat statusH = 34;
     CGFloat footH = 16;
     CGFloat vGap = 12;
 
     CGFloat ch = pad + titleH + 6 + subH + vGap + dispH + vGap + keypadH
-              + vGap + smallH + 10 + btnH + 8 + statusH + 6 + footH + pad;
+              + vGap + btnH + 8 + statusH + 6 + footH + pad;
 
     CGFloat cy = (h - ch) / 2;
     if (cy < 24) cy = 24;
@@ -159,28 +158,24 @@
     [card addSubview:keypad];
     y += keypadH + vGap;
 
-    // ---- 粘贴 / 清空（小按钮）----
+    // ---- 粘贴卡密 / 激活卡密（并排）----
     CGFloat halfW = (inner - 10) / 2.0;
 
-    UIButton *paste = [self smallButton:@"粘贴卡密"
-                                  color:[UIColor colorWithRed:0.52 green:0.57 blue:0.62 alpha:1.0]
-                                 action:@selector(onPaste)];
-    paste.frame = CGRectMake(pad, y, halfW, smallH);
+    UIButton *paste = [UIButton buttonWithType:UIButtonTypeCustom];
+    paste.frame = CGRectMake(pad, y, halfW, btnH);
+    [paste setTitle:@"粘贴卡密" forState:UIControlStateNormal];
+    [paste setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    paste.titleLabel.font = [UIFont boldSystemFontOfSize:15];
+    paste.backgroundColor = [UIColor colorWithRed:0.52 green:0.57 blue:0.62 alpha:1.0];
+    paste.layer.cornerRadius = 10;
+    [paste addTarget:self action:@selector(onPaste) forControlEvents:UIControlEventTouchUpInside];
     [card addSubview:paste];
 
-    UIButton *clear = [self smallButton:@"清空"
-                                  color:[UIColor colorWithRed:0.72 green:0.75 blue:0.78 alpha:1.0]
-                                 action:@selector(onClear)];
-    clear.frame = CGRectMake(pad + halfW + 10, y, halfW, smallH);
-    [card addSubview:clear];
-    y += smallH + 10;
-
-    // ---- 激活卡密（绿色全宽主按钮）----
     UIButton *activate = [UIButton buttonWithType:UIButtonTypeCustom];
-    activate.frame = CGRectMake(pad, y, inner, btnH);
+    activate.frame = CGRectMake(pad + halfW + 10, y, halfW, btnH);
     [activate setTitle:@"激活卡密" forState:UIControlStateNormal];
     [activate setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    activate.titleLabel.font = [UIFont boldSystemFontOfSize:17];
+    activate.titleLabel.font = [UIFont boldSystemFontOfSize:16];
     activate.backgroundColor = G_CLR_GREEN;
     activate.layer.cornerRadius = 10;
     [activate addTarget:self action:@selector(onActivate) forControlEvents:UIControlEventTouchUpInside];
@@ -280,12 +275,6 @@
 - (void)onBackspace {
     if (!self.input.length) return;
     [self.input deleteCharactersInRange:NSMakeRange(self.input.length - 1, 1)];
-    [self refreshKeyLabel];
-}
-
-- (void)onClear {
-    [self.input setString:@""];
-    [self setStatusText:@"已清空" isError:NO];
     [self refreshKeyLabel];
 }
 
