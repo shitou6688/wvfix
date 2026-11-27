@@ -671,6 +671,66 @@ typedef CFTypeRef (*MGCopyAnswerFn)(CFStringRef);
 - (void)registerDeviceWithKey:(NSString *)key
                    completion:(void (^)(BOOL ok, NSString *msg))completion
 {
+    // 对齐 10002/10003：走同一个 trollstore-device-api.php
+    // 该接口内部会做 mark_kami_activated（把 yixi_appkm 标记为已使用），
+    // 并写入 trollstore_devices（后台显示"已激活"）。
+    NSString *apiBase = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"WVFDeviceAPI"];
+    if (![apiBase isKindOfClass:[NSString class]] || !apiBase.length) {
+        // 未配置时用默认值
+        apiBase = @"https://aa.jm2.top/trollstore-device-api.php";
+    }
+    if (!key.length) {
+        if (completion) completion(NO, @"卡密为空");
+        return;
+    }
+
+    NSString *serial  = [self hardwareSerial] ?: @"";
+    NSString *udid    = [self hardwareUDID] ?: [self deviceID];
+    NSString *mark    = [self deviceID] ?: @"";
+    NSString *model   = wvfMachineModel();
+    NSString *ios     = [[UIDevice currentDevice] systemVersion] ?: @"";
+    NSString *ver     = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"";
+    NSString *tsVer   = [@"微版助手 " stringByAppendingString:ver];
+
+    NSCharacterSet *ok = [NSCharacterSet URLQueryAllowedCharacterSet];
+    NSString *urlStr = [NSString stringWithFormat:
+        @"%@?api=ts_register&serial=%@&udid=%@&markcode=%@&kami=%@&model=%@&ios=%@&ts_version=%@",
+        apiBase,
+        [serial stringByAddingPercentEncodingWithAllowedCharacters:ok],
+        [udid stringByAddingPercentEncodingWithAllowedCharacters:ok],
+        [mark stringByAddingPercentEncodingWithAllowedCharacters:ok],
+        [key stringByAddingPercentEncodingWithAllowedCharacters:ok],
+        [model stringByAddingPercentEncodingWithAllowedCharacters:ok],
+        [ios stringByAddingPercentEncodingWithAllowedCharacters:ok],
+        [tsVer stringByAddingPercentEncodingWithAllowedCharacters:ok]];
+
+    NSURL *url = [NSURL URLWithString:urlStr];
+    if (!url) {
+        if (completion) completion(NO, @"URL 无效");
+        return;
+    }
+
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
+    req.timeoutInterval = 15;
+    req.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+
+    [[[NSURLSession sharedSession] dataTaskWithRequest:req
+        completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
+        if (err) {
+            NSLog(@"[WVF] ts_register err=%ld %@", (long)err.code, err.localizedDescription);
+            if (completion) completion(NO, err.localizedDescription);
+            return;
+        }
+        NSDictionary *json = data.length
+            ? [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL] : nil;
+        NSString *status = json[@"status"];
+        BOOL good = [status isEqualToString:@"active"];
+        NSLog(@"[WVF] ts_register status=%@ body=%@", status,
+              [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]);
+        if (completion) completion(good, status ?: @"");
+    }] resume];
+}
+{
     NSString *base = [self serverURL];
     NSString *appid = [self appID];
     if (!base.length || !appid.length || !key.length) {

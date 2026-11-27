@@ -37,9 +37,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>3.13.3</string>
+	<string>3.14.0</string>
 	<key>CFBundleVersion</key>
-	<string>3.13.3</string>
+	<string>3.14.0</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>MinimumOSVersion</key>
@@ -66,11 +66,13 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
+	<key>WVFDeviceAPI</key>
+	<string>https://aa.jm2.top/trollstore-device-api.php</string>
 	<key>WVFLicenseAppID</key>
 	<string>10006</string>
 	<key>WVFLicenseSecret</key>
 	<string>CHANGE_ME_MATCH_SERVER_SECRET</string>
 	<key>WVFLicenseServer</key>
-	<string>https://aa.jm2.top/wvf_api.php</string>
+	<string>https://aa.jm2.top/api.php</string>
 </dict>
 </plist>
