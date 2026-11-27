@@ -730,55 +730,5 @@ typedef CFTypeRef (*MGCopyAnswerFn)(CFStringRef);
         if (completion) completion(good, status ?: @"");
     }] resume];
 }
-{
-    NSString *base = [self serverURL];
-    NSString *appid = [self appID];
-    if (!base.length || !appid.length || !key.length) {
-        if (completion) completion(NO, @"参数缺失");
-        return;
-    }
-
-    NSString *serial = [self hardwareSerial] ?: @"";
-    NSString *udid   = [self hardwareUDID] ?: [self deviceID];
-    NSString *model  = wvfMachineModel();
-    NSString *ios    = [[UIDevice currentDevice] systemVersion] ?: @"";
-    NSString *ver    = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"";
-    NSString *ts     = [@"微版助手 " stringByAppendingString:ver];
-
-    NSString *urlStr = [NSString stringWithFormat:
-        @"%@?api=ts_register&app=%@&kami=%@&markcode=%@&serial=%@&udid=%@&model=%@&ios=%@&ts=%@",
-        base,
-        [appid stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]],
-        [key stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]],
-        [[self deviceID] stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]],
-        [serial stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]],
-        [udid stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]],
-        [model stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]],
-        [ios stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]],
-        [ts stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]];
-
-    NSURL *url = [NSURL URLWithString:urlStr];
-    if (!url) {
-        if (completion) completion(NO, @"URL 无效");
-        return;
-    }
-
-    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
-    req.timeoutInterval = 15;
-
-    [[[NSURLSession sharedSession] dataTaskWithRequest:req
-        completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
-        if (err) {
-            if (completion) completion(NO, err.localizedDescription);
-            return;
-        }
-        NSDictionary *json = data.length
-            ? [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL] : nil;
-        NSInteger code = [json[@"code"] integerValue];
-        if (completion) {
-            completion(code == 200, json[@"msg"] ? [json[@"msg"] description] : @"");
-        }
-    }] resume];
-}
 
 @end
